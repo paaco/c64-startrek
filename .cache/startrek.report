@@ -1,0 +1,138 @@
+
+; ******** Source: c:\Users\Alex\dev\projects\c64-startrek\startrek.asm
+     1                          ; STAR TREK: LAST HOPE - a 2K card game
+     2                          ; Developed for the https://itch.io/jam/the-c64-cassette-50-charity-competition
+     3                          
+     4                          ; Only WRITES memory < $1000 and uses Dxxx IO, calling/reading KERNAL/BASIC is OK
+     5                          
+     6                          ; Note that it is only required to load below $1000, not specifically $0801,
+     7                          ; so we could even load at $0400 (not lower to keep Tape loading compatibility)
+     8                          ; However, loading it there (anything below $0801) will kill RUN, only allow direct SYS
+     9                          ; Exomizer also uses $0334-$03D0 as decrunching buffer; decrunching there will hang
+    10                          
+    11                          ; Without packer it's possible to load and run $0120-$1000 giving 3808 bytes:
+    12                          ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
+    13                          
+    14                          DEBUG=1
+    15                          !ifndef DEBUG {DEBUG=0}
+    16                          !ifndef INTRO {INTRO=0}
+    17                          !if DEBUG=1 {
+    18                              !initmem $AA
+    19                          }
+    20                          
+    21                          BLACK=0
+    22                          WHITE=1
+    23                          RED=2
+    24                          CYAN=3
+    25                          PURPLE=4
+    26                          GREEN=5
+    27                          BLUE=6
+    28                          YELLOW=7
+    29                          ORANGE=8
+    30                          BROWN=9
+    31                          LIGHT_RED=10
+    32                          DARK_GREY=11
+    33                          GREY=12
+    34                          LIGHT_GREEN=13
+    35                          LIGHT_BLUE=14
+    36                          LIGHT_GREY=15
+    37                          
+    38                          ; ZP addresses
+    39                          ; !addr _CursorPos=$02 ; ptr
+    40                          ; !addr _ColorPos=$04 ; ptr
+    41                          ; !addr CharCol=$06
+    42                          ; !addr ZP_RNG_LOW = $08
+    43                          ; !addr ZP_RNG_HIGH = $09
+    44                          ; !addr Joystick=$0F
+    45                          ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
+    46                          ;!addr _Draw=$E0     ; $E0-$F8 is block drawing routine
+    47                          
+    48                          ;############################################################################
+    49                          *=$0120     ; DATA (0120-01ED = 205 bytes)
+    50                          
+    51  0120 eeeeeeeeeeeeeeee...            !fill 205,$EE ; remaining
+    52                          
+    53                          ;############################################################################
+    54                          *=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
+    55  01ed 0000000000000000...            !fill 11,0
+    56                          *=$01F8     ; Override return value on stack with own start address
+    57  01f8 ff03                           !word INIT-1
+    58                          
+    59                          ;############################################################################
+    60                          *=$01FA     ; DATA (01FA-0276 = 125 bytes)
+    61                          
+    62  01fa eeeeeeeeeeeeeeee...            !fill 125,$EE ; remaining
+    63                          
+    64                          ;############################################################################
+    65                          *=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
+    66  0277 0000000000                     !fill 5,0
+    67                          
+    68  027c eeeeeeeeeeeeeeee...            !fill 17,$EE ; remaining
+    69                          
+    70                          ;############################################################################
+    71                          *=$028D     ; 028D-028E 2 bytes TRASHED DURING LOADING
+    72  028d 0000                           !fill 2,0
+    73                          
+    74  028f eeeeeeeeeeeeeeee...            !fill 18,$EE ; remaining
+    75                          
+    76                          ;############################################################################
+    77                          *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
+    78  02a1 00                             !byte 0
+    79                          
+    80  02a2 eeeeeeeeeeeeeeee...            !fill 114,$EE ; remaining
+    81                          
+    82                          ;############################################################################
+    83                          *=$0314     ; IRQ, BRK and NMI Vectors to keep
+    84  0314 31ea66fe47fe                   !byte $31,$ea,$66,$fe,$47,$fe
+    85  031a 4af391f20ef2                   !byte $4a,$f3,$91,$f2,$0e,$f2
+    86  0320 50f233f357f1caf1               !byte $50,$f2,$33,$f3,$57,$f1,$ca,$f1
+    87  0328 edf6                           !byte $ed,$f6 ; STOP vector - Essential to avoid JAM
+    88                          
+    89                                      ; DATA (032A-0400 = 214 bytes)
+    90  032a eeeeeeeeeeeeeeee...            !fill 214,$EE ; remaining
+    91                          
+    92                          ;############################################################################
+    93                          *=$0400     ; SCREEN (WILL BE WIPED)
+    94                          
+    95                          INIT:
+    96                                      ; disable IRQ to avoid KERNAL messing with keyboard
+    97  0400 a07f                           ldy #%01111111
+    98  0402 8c0ddc                         sty $dc0d   ; Turn off CIAs Timer interrupts
+    99  0405 8c0ddd                         sty $dd0d   ; Turn off CIAs Timer interrupts
+   100  0408 ad0ddc                         lda $dc0d   ; cancel all CIA-IRQs in queue/unprocessed
+   101  040b ad0ddd                         lda $dd0d   ; cancel all CIA-IRQs in queue/unprocessed
+   102                          
+   103                                      ; move stack down to gain extra room from $120
+   104  040e a21f                           ldx #$1f
+   105  0410 9a                             txs
+   106                          
+   107                                      ; setup VIC
+   108  0411 a99b                           lda #%10011011              ; screen on
+   109  0413 8d11d0                         sta $D011
+   110  0416 a900                           lda #0                      ; no sprites
+   111  0418 8d15d0                         sta $D015
+   112  041b a908                           lda #%00001000              ; hires
+   113  041d 8d16d0                         sta $D016
+   114  0420 a914                           lda #20                     ; uppercase
+   115  0422 8d18d0                         sta $D018
+   116                                      ; lda #COL_BORDER
+   117                                      ; sta $D020
+   118                                      ; lda #COL_SCREEN
+   119                                      ; sta $D021
+   120                          
+   121                                      ; TODO setup SID
+   122                          
+   123  0425 4ce807                         jmp Start
+   124                          
+   125                          ;############################################################################
+   126                          *=$07E8     ; CODE
+   127                          
+   128                          Start:
+   129  07e8 ee20d0                         inc $D020
+   130  07eb 4ce807                         jmp Start
+   131                          
+   132                          ;----------------------------------------------------------------------------
+   133                          ; MAX 2K ALLOWED HERE
+   134                          ;----------------------------------------------------------------------------
+   135  07ee 00                 !byte 0 ; DUMMY to show where we are in report
+   136                          !if * >= $1000 { !error "Out of memory" }
