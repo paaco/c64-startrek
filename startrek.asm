@@ -317,15 +317,6 @@ SetCursor:
             sty _CursorPos+1
             rts
 
-; adds A to cursor (clobbers A)
-AddAToCursor:
-            clc
-            adc _CursorPos
-            sta _CursorPos
-            bcc +
-            inc _CursorPos+1
-+           rts
-
 ; adds 16-bit A/Y to cursor (clobbers A)
 AddAYToCursor:
             jsr AddAToCursor
@@ -334,6 +325,26 @@ AddAYToCursor:
             adc _CursorPos+1
             sta _CursorPos+1
             rts
+
+; set cursor to coordinates A,Y where A=0..39 and Y=0..24 (clobbers A,Y)
+SetCoordinates:
+            sta _CursorPos
+            lda PackedLineOffsets,y
+            pha                         ; backup
+            and #%00000111              ; high bits ($04..$07)
+            sta _CursorPos+1
+            pla                         ; restore
+            and #%11111000              ; low bits
+            ; fall through
+
+; adds A to cursor (clobbers A)
+AddAToCursor:
+            clc
+            adc _CursorPos
+            sta _CursorPos
+            bcc +
+            inc _CursorPos+1
++           rts
 
 ;--------------------------------------------------------------
 ; DATA
@@ -361,10 +372,15 @@ GfxData:
     !byte 160,64,160,160,64,160
     !byte 225,124,225,97,126,97
     !byte 32,127,103,101,255,32
+    ; TODO add 3x3 planet here, and other ships
 
-; names of crew leaders (each starts with a unique )
+; names of captains (each starts with a unique character)
 CrewNames:
     !scr "kirk","jluc","cath","arch","mikl","saru"
+
+; 25 screen line offsets packed in a single byte
+PackedLineOffsets:
+    !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
 
 
 ;----------------------------------------------------------------------------
