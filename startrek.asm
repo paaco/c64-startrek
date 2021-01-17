@@ -11,7 +11,7 @@
 ; Without packer it's possible to load and run $0120-$1000 giving 3808 bytes:
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 
-DEBUG=1
+DEBUG=0
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
@@ -35,7 +35,7 @@ LIGHT_GREEN=13
 LIGHT_BLUE=14
 LIGHT_GREY=15
 ; colors
-COL_BORDER=RED
+COL_BORDER=BLACK
 COL_SCREEN=BLACK
 COL_TEXT=GREEN
 ; constants
@@ -221,31 +221,48 @@ INIT:
             jmp Start
 
 ;############################################################################
-*=$07E8     ; CODE
+*=$07F8     ; SPRITE POINTERS (IN CASE YOU CARE)
+
+;############################################################################
+*=$0800     ; CODE
 
 Start:
-            ; cls
+            ; cls with randomized starfield
+            lda #33                     ; DEBUG
+            sta ZP_RNG_LOW              ; DEBUG
+
             ldx #0
--           lda #COL_TEXT
-            sta $D800,x
-            sta $D900,x
-            sta $DA00,x
-            sta $DB00,x
+            lda #$04
+            sta .fixcls1
+            eor #$DC
+            sta .fixcls2
+-           jsr Random                  ; 0..255
+            and #$7F
+            tay
             lda #CHR_SPACE
-            sta $0400,x
-            sta $0500,x
-            sta $0600,x
-            sta $06E8,x
+            cpy #SIZEOF_SKYOBJECTS
+            bcs +
+            lda SkyObjects,y
+            .fixcls1=*+2
++           sta $0400,x
+            lda #COL_TEXT
+            .fixcls2=*+2
+            sta $D800,x
             inx
+            bne -
+            inc .fixcls1
+            inc .fixcls2
+            lda .fixcls1
+            cmp #8
             bne -
 
             jsr DrawSectorMarks
-            lda #<($0400+6*40+2)
-            ldy #>($0400+6*40+2)
+            lda #2;<($0400+6*40+2)
+            ldy #6;>($0400+6*40+2)
             ldx #G_SPACESHIP
             jsr DrawGfxObject
-            lda #<($0400+0*40+1)
-            ldy #>($0400+0*40+1)
+            lda #1;<($0400+0*40+1)
+            ldy #0;>($0400+0*40+1)
             ldx #G_DS9
             jsr DrawGfxObject
 
@@ -285,7 +302,7 @@ EraseGfxObject:
 
 ; draw object X at A/Y
 DrawGfxObject:
-            jsr SetCursor
+            jsr SetCoordinates
             lda GfxObjectsData+GO_WIDTH,x
             sta ObjWidth
             lda GfxObjectsData+GO_HEIGHT,x
@@ -372,7 +389,19 @@ GfxData:
     !byte 160,64,160,160,64,160
     !byte 225,124,225,97,126,97
     !byte 32,127,103,101,255,32
-    ; TODO add 3x3 planet here, and other ships
+    _gPlanet=*-GfxData ; 3x3
+    !byte 108,64,123
+    !byte 93,102,93
+    !byte 124,64,126
+    _gStation=*-GfxData ; 3x3
+    !byte 233,98,223
+    !byte 225,209,97
+    !byte 95,226,105
+    _gTinyShip=*-GfxData ; 3x1
+    !byte 60,120,62
+    _gEnemyShip=*-GfxData ; 3x2
+    !byte 79,197,80
+    !byte 77,32,78
 
 ; names of captains (each starts with a unique character)
 CrewNames:
@@ -382,6 +411,19 @@ CrewNames:
 PackedLineOffsets:
     !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
 
+MenuOptions:
+    !scr "warp  "
+    !scr "engage"
+    !scr "land  "
+
+SkyObjects:
+    !byte 46 ; dot (tiny star)
+    !byte 46 ; dot (tiny star)
+    !byte 46 ; dot (tiny star)
+    !byte 46 ; dot (tiny star)
+    !byte 81 ; ball (planet)
+    !byte 90 ; diamond (star)
+SIZEOF_SKYOBJECTS=*-SkyObjects
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
