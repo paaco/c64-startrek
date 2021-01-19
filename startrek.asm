@@ -49,6 +49,9 @@ CHR_SECTOR=91 ; standing cross
 !addr _CursorPos = $06 ; ptr
 !addr ObjWidth = $08
 !addr ObjHeight = $09
+!addr Tmp1 = $0A
+!addr Tmp2 = $0B
+!addr Tmp3 = $0C
 
 ;############################################################################
 *=$0120     ; DATA (0120-01ED = 205 bytes)
@@ -227,7 +230,7 @@ INIT:
 *=$0800     ; CODE
 
 Start:
-            lda #33                     ; DEBUG
+            lda #44                     ; DEBUG
             sta ZP_RNG_LOW              ; DEBUG
 
             ; cls
@@ -245,11 +248,9 @@ Start:
             inx
             bne -
 
+            ; draw space screen
             jsr DrawSectorMarks
-            lda #2+16;<($0400+6*40+2)
-            ldy #6;>($0400+6*40+2)
-            ldx #G_SPACESHIP
-            jsr DrawGfxObject
+            ; draw loop over all objects
             lda #1;<($0400+0*40+1)
             ldy #0;>($0400+0*40+1)
             ldx #G_DS9
@@ -266,9 +267,69 @@ Start:
             ldy #19
             ldx #G_PLANET
             jsr DrawGfxObject
+            ; end with the space ship
+            lda #2+16;<($0400+6*40+2)
+            ldy #6;>($0400+6*40+2)
+            ldx #G_SPACESHIP
+            jsr DrawGfxObject
+
+            jsr DrawPlanetSurface
 
             jmp *
 
+;----------------------------------------------------------------------------
+; PLANET
+;----------------------------------------------------------------------------
+
+; draw planet surface (column wise)
+DrawPlanetSurface:
+            lda #$00
+            sta Tmp1                    ; init x-pos
+--          lda #$00
+            ldy #$04
+            jsr SetCursor
+
+            ; calculate mountain/sky switch y-line for this column
+            ; TODO ideally this should be a waving line up or down not just 8 or 9
+            jsr Random
+            and #$03                    ; 0..3
+            adc #$05                    ; 4..7
+            sta Tmp2                    ; init switch line
+
+            ldx #0                      ; y-pos
+            stx Tmp3                    ; init row definition offset
+-           jsr Random
+            ldy Tmp3
+            cmp PlanetSurfaceData,y     ; chance on special
+            lda PlanetSurfaceData+2,y   ; default char
+            bcs +
+            lda PlanetSurfaceData+1,Y   ; special char
++           ldy Tmp1                    ; x-pos
+            sta (_CursorPos),y
+            lda #40
+            jsr AddAToCursor
+            inx
+            cpx Tmp2                    ; switch?
+            bne +
+            lda Tmp3
+            clc
+            adc #3                      ; switch to next row definition
+            sta Tmp3
+            lda #11
+            sta Tmp2                    ; set next switch
++           cpx #25
+            bne -
+            inc Tmp1
+            lda Tmp1
+            cmp #40
+            bne --
+            rts
+
+PlanetSurfaceData:
+        ; % (/256)  char    otherwise
+    !byte 20,        46,     CHR_SPACE ; dot (tiny star) or space
+    !byte 80,        223, 233       ; reversed ball (hole) or rock 81+128 160
+    !byte 4,         104,    CHR_SPACE ; noise (rocks) or space (floor)
 
 ;----------------------------------------------------------------------------
 ; MAP
