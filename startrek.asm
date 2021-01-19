@@ -227,43 +227,44 @@ INIT:
 *=$0800     ; CODE
 
 Start:
-            ; cls with randomized starfield
             lda #33                     ; DEBUG
             sta ZP_RNG_LOW              ; DEBUG
 
+            ; cls
             ldx #0
-            lda #$04
-            sta .fixcls1
-            eor #$DC
-            sta .fixcls2
--           jsr Random                  ; 0..255
-            and #$7F
-            tay
-            lda #CHR_SPACE
-            cpy #SIZEOF_SKYOBJECTS
-            bcs +
-            lda SkyObjects,y
-            .fixcls1=*+2
-+           sta $0400,x
-            lda #COL_TEXT
-            .fixcls2=*+2
+-           lda #COL_TEXT
             sta $D800,x
+            sta $D900,x
+            sta $DA00,x
+            sta $DB00,x
+            lda #CHR_SPACE
+            sta $0400,x
+            sta $0500,x
+            sta $0600,x
+            sta $06E8,x
             inx
-            bne -
-            inc .fixcls1
-            inc .fixcls2
-            lda .fixcls1
-            cmp #8
             bne -
 
             jsr DrawSectorMarks
-            lda #2;<($0400+6*40+2)
+            lda #2+16;<($0400+6*40+2)
             ldy #6;>($0400+6*40+2)
             ldx #G_SPACESHIP
             jsr DrawGfxObject
             lda #1;<($0400+0*40+1)
             ldy #0;>($0400+0*40+1)
             ldx #G_DS9
+            jsr DrawGfxObject
+            lda #20
+            ldy #4
+            ldx #G_RAIDER
+            jsr DrawGfxObject
+            lda #30
+            ldy #9
+            ldx #G_STATION
+            jsr DrawGfxObject
+            lda #19
+            ldy #19
+            ldx #G_PLANET
             jsr DrawGfxObject
 
             jmp *
@@ -377,6 +378,14 @@ GfxObjectsData:
     !byte _gSpaceship,5,3
     G_DS9=*-GfxObjectsData
     !byte _gDS9,6,5
+    G_PLANET=*-GfxObjectsData
+    !byte _gPlanet,3,3
+    G_STATION=*-GfxObjectsData
+    !byte _gStation,3,3
+    G_RAIDER=*-GfxObjectsData
+    !byte _gTinyShip,3,1
+    G_ENEMYSHIP=*-GfxObjectsData
+    !byte _gEnemyShip,3,2
 
 GfxData:
     _gSpaceship=*-GfxData ; 5x3
@@ -410,20 +419,6 @@ CrewNames:
 ; 25 screen line offsets packed in a single byte
 PackedLineOffsets:
     !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
-
-MenuOptions:
-    !scr "warp  "
-    !scr "engage"
-    !scr "land  "
-
-SkyObjects:
-    !byte 46 ; dot (tiny star)
-    !byte 46 ; dot (tiny star)
-    !byte 46 ; dot (tiny star)
-    !byte 46 ; dot (tiny star)
-    !byte 81 ; ball (planet)
-    !byte 90 ; diamond (star)
-SIZEOF_SKYOBJECTS=*-SkyObjects
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
