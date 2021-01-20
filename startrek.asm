@@ -277,17 +277,18 @@ Start:
 
             jmp *
 
+
 ;----------------------------------------------------------------------------
 ; PLANET
 ;----------------------------------------------------------------------------
 
 ; draw planet surface (column wise)
 DrawPlanetSurface:
-            lda #$00
+            lda #0
             sta Tmp1                    ; init x-pos
---          lda #$00
-            ldy #$04
-            jsr SetCursor
+--          lda #0
+            ldy #0
+            jsr SetCoordinates
 
             ; calculate mountain/sky switch y-line for this column
             ; TODO ideally this should be a waving line up or down not just 8 or 9
@@ -303,7 +304,7 @@ DrawPlanetSurface:
             cmp PlanetSurfaceData,y     ; chance on special
             lda PlanetSurfaceData+2,y   ; default char
             bcs +
-            lda PlanetSurfaceData+1,Y   ; special char
+            lda PlanetSurfaceData+1,y   ; special char
 +           ldy Tmp1                    ; x-pos
             sta (_CursorPos),y
             lda #40
@@ -311,12 +312,13 @@ DrawPlanetSurface:
             inx
             cpx Tmp2                    ; switch?
             bne +
-            lda Tmp3
-            clc
-            adc #3                      ; switch to next row definition
-            sta Tmp3
-            lda #11
+            ldy Tmp3
+            lda PlanetSurfaceData+3,y
             sta Tmp2                    ; set next switch
+            tya
+            ;clc                         ; C=1 always (due to cpx)
+            adc #4-1                     ; Tmp3 += 4 (moves to next row definition)
+            sta Tmp3
 +           cpx #25
             bne -
             inc Tmp1
@@ -325,11 +327,6 @@ DrawPlanetSurface:
             bne --
             rts
 
-PlanetSurfaceData:
-        ; % (/256)  char    otherwise
-    !byte 20,        46,     CHR_SPACE ; dot (tiny star) or space
-    !byte 80,        223, 233       ; reversed ball (hole) or rock 81+128 160
-    !byte 4,         104,    CHR_SPACE ; noise (rocks) or space (floor)
 
 ;----------------------------------------------------------------------------
 ; MAP
@@ -349,9 +346,6 @@ DrawSectorMarks:
             dey
             bpl -
             rts
-
-SectorOffsetData:
-    !byte 0,8,16,24,32,39
 
 
 ;--------------------------------------------------------------
@@ -390,21 +384,6 @@ DrawGfxObject:
 ; CURSOR
 ;--------------------------------------------------------------
 
-; sets cursor to A/Y
-SetCursor:
-            sta _CursorPos
-            sty _CursorPos+1
-            rts
-
-; adds 16-bit A/Y to cursor (clobbers A)
-AddAYToCursor:
-            jsr AddAToCursor
-            tya
-            clc
-            adc _CursorPos+1
-            sta _CursorPos+1
-            rts
-
 ; set cursor to coordinates A,Y where A=0..39 and Y=0..24 (clobbers A,Y)
 SetCoordinates:
             sta _CursorPos
@@ -424,6 +403,16 @@ AddAToCursor:
             bcc +
             inc _CursorPos+1
 +           rts
+
+; adds 16-bit A/Y to cursor (clobbers A)
+AddAYToCursor:
+            jsr AddAToCursor
+            tya
+            clc
+            adc _CursorPos+1
+            sta _CursorPos+1
+            rts
+
 
 ;--------------------------------------------------------------
 ; DATA
@@ -477,9 +466,19 @@ GfxData:
 CrewNames:
     !scr "kirk","jluc","cath","arch","mikl","saru"
 
+SectorOffsetData:
+    !byte 0,8,16,24,32,39
+
 ; 25 screen line offsets packed in a single byte
 PackedLineOffsets:
     !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
+
+PlanetSurfaceData:
+        ; % (/256)  char    otherwise    next switch
+    !byte 30,       46,     CHR_SPACE,   10          ; dot (tiny star) or space
+    !byte 80,       223,    233,         12          ; /| and |\ chars (peaks)
+    !byte 80,       81+128, 160,         12          ; reversed ball (hole) or rock 81+128 160
+    !byte 4,        92,     CHR_SPACE,   12          ; noise (rocks) or space (floor)
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
