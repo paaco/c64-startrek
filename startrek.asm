@@ -275,6 +275,31 @@ Start:
 
             jsr DrawPlanetSurface
 
+            lda #10
+            ldy #16
+            jsr SetCoordinates
+            jsr DrawPerson
+
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
+
+            lda #13
+            ldy #18
+            jsr SetCoordinates
+            ldx #0
+--          jsr DrawTransporter
+            ldy #8
+-           cpy $d012
+            bne -
+            dey
+            bne -
+            inx
+            cpx #SIZEOF_TRANSPORTERBEAM
+            bne --
+            lda #'P'-64
+            jsr DrawSpecialPerson
+
             jmp *
 
 
@@ -379,6 +404,27 @@ DrawGfxObject:
             bne --
             rts
 
+; draws a person at the cursor location
+DrawPerson:
+            lda #81                     ; ball head
+; draws a person with A as head at the cursor location
+DrawSpecialPerson:
+            ldy #0
+            sta (_CursorPos),y
+            lda #86                     ; arms and legs
+            ldy #40
+            sta (_CursorPos),y
+            rts
+
+; draws a transporter X at the cursor location
+DrawTransporter:
+            lda TransporterBeam,x
+            ldy #0
+            sta (_CursorPos),y
+            ldy #40
+            sta (_CursorPos),y
+            rts
+
 
 ;--------------------------------------------------------------
 ; CURSOR
@@ -479,6 +525,10 @@ PlanetSurfaceData:
     !byte 80,       223,    233,         12          ; /| and |\ chars (peaks)
     !byte 80,       81+128, 160,         12          ; reversed ball (hole) or rock 81+128 160
     !byte 4,        92,     CHR_SPACE,   12          ; noise (rocks) or space (floor)
+
+TransporterBeam:
+    !byte 119,69,68,91,219
+SIZEOF_TRANSPORTERBEAM=*-TransporterBeam
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
