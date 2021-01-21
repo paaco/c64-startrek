@@ -41,6 +41,7 @@ COL_TEXT=GREEN
 ; constants
 CHR_SPACE=32+DEBUG*10 ; space or star
 CHR_SECTOR=91 ; standing cross
+TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 
 ; ZP addresses
 !addr Joystick=$02
@@ -52,6 +53,13 @@ CHR_SECTOR=91 ; standing cross
 !addr Tmp1 = $0A
 !addr Tmp2 = $0B
 !addr Tmp3 = $0C
+!addr AwayTeam = $10
+    TM_CAPTAIN=0        ; head char of captain
+    TM_CAPTAIN_HP=1     ; hitpoints
+    LEN_TM_MEMBERS=5    ; SoA of members
+    TM_MEMBERS_X=2      ; array of X-offset for 5 members (<0 means member is dead)
+    TM_MEMBERS_Y=7      ; array of Y-offset for 5 members
+    SIZEOF_TM=12
 
 ;############################################################################
 *=$0120     ; DATA (0120-01ED = 205 bytes)
@@ -275,30 +283,68 @@ Start:
 
             jsr DrawPlanetSurface
 
+            ; DEBUG setup away team
+            lda #'J'-64                 ; JLUC
+            sta AwayTeam+TM_CAPTAIN
+            lda #1
+            sta AwayTeam+TM_CAPTAIN_HP
+            lda #13
+            sta AwayTeam+TM_MEMBERS_X+0
+            lda #18
+            sta AwayTeam+TM_MEMBERS_Y+0
             lda #10
-            ldy #16
-            jsr SetCoordinates
-            jsr DrawPerson
+            sta AwayTeam+TM_MEMBERS_X+1
+            lda #16
+            sta AwayTeam+TM_MEMBERS_Y+1
+            lda #5
+            sta AwayTeam+TM_MEMBERS_X+2
+            lda #20
+            sta AwayTeam+TM_MEMBERS_Y+2
+            lda #$FF
+            sta AwayTeam+TM_MEMBERS_X+3
+            sta AwayTeam+TM_MEMBERS_X+4
 
             jsr DebounceJoystick
 -           jsr ReadJoystick
             beq -
 
-            lda #13
-            ldy #18
-            jsr SetCoordinates
-            ldx #0
---          jsr DrawTransporter
-            ldy #8
+            ; transporting all members of the away team at the same time
+            lda #0
+            sta Tmp2                    ; init transporter phase#
+
+--          ldx #0
+-           stx Tmp1                    ; init member#
+            lda AwayTeam+TM_MEMBERS_X,x
+            bmi +                       ; dead?
+            ldy AwayTeam+TM_MEMBERS_Y,x
+            ldx Tmp2                    ; phase#
+            jsr DrawTransporterAt
++           ldx Tmp1
+            inx
+            cpx #LEN_TM_MEMBERS
+            bne -
+            ; visual delay
+            ldy #TRANSPORTER_DELAY
 -           cpy $d012
             bne -
             dey
             bne -
-            inx
-            cpx #SIZEOF_TRANSPORTERBEAM
+            inc Tmp2
+            lda Tmp2
+            cmp #SIZEOF_TRANSPORTERBEAM
             bne --
-            lda #'P'-64
-            jsr DrawSpecialPerson
+
+            ; draw Away Team persons
+            ldx #0                      ; init member#
+-           lda AwayTeam+TM_MEMBERS_X,x
+            bmi +                       ; dead?
+            ldy AwayTeam+TM_MEMBERS_Y,x
+            jsr SetCoordinates
+            lda AwayTeam+TM_CAPTAIN     ; head symbol
+            jsr DrawPersonBasedOnX
++           inx
+            cpx #LEN_TM_MEMBERS
+            bne -
 
             jmp *
 
@@ -404,10 +450,14 @@ DrawGfxObject:
             bne --
             rts
 
-; draws a person at the cursor location
+; calls DrawSpecialPerson when X=0 and DrawPerson otherwise (clobbers A,Y)
+DrawPersonBasedOnX:
+            cpx #0
+            beq DrawSpecialPerson
+; draws a person at the cursor location (clobbers A,Y)
 DrawPerson:
             lda #81                     ; ball head
-; draws a person with A as head at the cursor location
+; draws a person with A as head at the cursor location (clobbers A,Y)
 DrawSpecialPerson:
             ldy #0
             sta (_CursorPos),y
@@ -416,7 +466,10 @@ DrawSpecialPerson:
             sta (_CursorPos),y
             rts
 
-; draws a transporter X at the cursor location
+; draws a transporter X and sets cursor to A/Y (clobbers A,Y)
+DrawTransporterAt:
+            jsr SetCoordinates
+; draws a transporter X at the cursor location (clobbers A,Y)
 DrawTransporter:
             lda TransporterBeam,x
             ldy #0
