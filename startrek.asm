@@ -53,6 +53,8 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr Tmp1 = $0A
 !addr Tmp2 = $0B
 !addr Tmp3 = $0C
+!addr Dx = $0D          ; joystick delta movement (-1,0,1)
+!addr Dy = $0E
 !addr AwayTeam = $10
     TM_CAPTAIN=0        ; head char of captain
     TM_CAPTAIN_HP=1     ; hitpoints
@@ -231,6 +233,23 @@ INIT:
 
             jmp Start
 
+; Logo
+*=$0400 + 11*40
+
+!scr "                                        "
+!scr "          star trek: last hope          "
+!scr "                                        "
+
+     ;1234567890123456789012345678901234567890
+!scr "captain's log, stardate 30321.1. the uss"
+!scr "firebird with its crew of elite captains"
+!scr "has arrived at ds709. the admiral will  "
+!scr "join us and lead away teams to find the "
+!scr "3 relics that can save the human race.  "
+!scr "there are stations to restock and repair"
+!scr "but look out for raiders.               "
+!scr "                                        "
+
 ;############################################################################
 *=$07F8     ; SPRITE POINTERS (IN CASE YOU CARE)
 
@@ -238,7 +257,7 @@ INIT:
 *=$0800     ; CODE
 
 Start:
-            lda #44                     ; DEBUG
+            lda #22                     ; DEBUG
             sta ZP_RNG_LOW              ; DEBUG
 
             ; cls
@@ -282,6 +301,11 @@ Start:
             jsr DrawGfxObject
 
             jsr DrawPlanetSurface
+
+            lda #36
+            ldy #11
+            ldx #G_TEMPLE
+            jsr DrawGfxObject
 
             ; DEBUG setup away team
             lda #'J'-64                 ; JLUC
@@ -334,6 +358,7 @@ Start:
             cmp #SIZEOF_TRANSPORTERBEAM
             bne --
 
+loop:
             ; draw Away Team persons
             ldx #0                      ; init member#
 -           lda AwayTeam+TM_MEMBERS_X,x
@@ -346,7 +371,58 @@ Start:
             cpx #LEN_TM_MEMBERS
             bne -
 
-            jmp *
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
+
+            ; transform joystick movement
+            ldx #0
+            ldy #0
+            lsr                         ; UP?
+            bcs +
+            dey
++           lsr                         ; DOWN?
+            bcs +
+            iny
++           lsr                         ; LEFT?
+            bcs +
+            dex
++           lsr                         ; RIGHT?
+            bcs +
+            inx
++           stx Dx
+            sty Dy
+
+            ; move team based on Dx/Dy
+            ldx #0
+-           lda AwayTeam+TM_MEMBERS_X,x
+            bmi +                       ; dead?
+            clc
+            adc Dx
+            sta AwayTeam+TM_MEMBERS_X,x
+            lda AwayTeam+TM_MEMBERS_Y,x
+            clc
+            adc Dy
+            sta AwayTeam+TM_MEMBERS_Y,x
++           inx
+            cpx #LEN_TM_MEMBERS
+            bne -
+
+            jmp loop
+
+; TODO: determine new position for member, based on Dx/Dy
+; TODO: ignore self somehow
+; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
+            ; A=X-coord, Y=Y-coord
+            jsr SetCoordinates
+            ldy #0
+            lda (_CursorPos),y
+            ldy #40
+            ora (_CursorPos),y
+            cmp #CHR_SPACE
+            bne +                       ; no
+            ; yes
++           rts
 
 
 ;----------------------------------------------------------------------------
@@ -365,7 +441,7 @@ DrawPlanetSurface:
             ; TODO ideally this should be a waving line up or down not just 8 or 9
             jsr Random
             and #$03                    ; 0..3
-            adc #$05                    ; 4..7
+            adc #$05                    ; 5..8
             sta Tmp2                    ; init switch line
 
             ldx #0                      ; y-pos
@@ -383,13 +459,13 @@ DrawPlanetSurface:
             inx
             cpx Tmp2                    ; switch?
             bne +
-            ldy Tmp3
+            lda Tmp3
+            ;clc                        ; C=1 always (due to cpx)
+            adc #4-1                    ; Tmp3 += 4 (moves to next row definition)
+            sta Tmp3
+            tay
             lda PlanetSurfaceData+3,y
             sta Tmp2                    ; set next switch
-            tya
-            ;clc                         ; C=1 always (due to cpx)
-            adc #4-1                     ; Tmp3 += 4 (moves to next row definition)
-            sta Tmp3
 +           cpx #25
             bne -
             inc Tmp1
@@ -535,6 +611,8 @@ GfxObjectsData:
     !byte _gTinyShip,3,1
     G_ENEMYSHIP=*-GfxObjectsData
     !byte _gEnemyShip,3,2
+    G_TEMPLE=*-GfxObjectsData
+    !byte _gTemple,3,4
 
 GfxData:
     _gSpaceship=*-GfxData ; 5x3
@@ -560,6 +638,11 @@ GfxData:
     _gEnemyShip=*-GfxData ; 3x2
     !byte 79,197,80
     !byte 77,32,78
+    _gTemple=*-GfxData ; 4x3
+    !byte 85,70,73
+    !byte 213,145,201
+    !byte 93,32,66
+    !byte 93,32,66
 
 ; names of captains (each starts with a unique character)
 CrewNames:
@@ -574,10 +657,11 @@ PackedLineOffsets:
 
 PlanetSurfaceData:
         ; % (/256)  char    otherwise    next switch
-    !byte 30,       46,     CHR_SPACE,   10          ; dot (tiny star) or space
-    !byte 80,       223,    233,         12          ; /| and |\ chars (peaks)
+    !byte 30,       46,     CHR_SPACE,   -1          ; dot (tiny star) or space
+    !byte 80,       223,    233,         10          ; /| and |\ chars (peaks)
     !byte 80,       81+128, 160,         12          ; reversed ball (hole) or rock 81+128 160
-    !byte 4,        92,     CHR_SPACE,   12          ; noise (rocks) or space (floor)
+    !byte 9,        92,     CHR_SPACE,   24          ; noise (rocks) or space (floor)
+    !byte 128,      99,     99,          0           ; status line
 
 TransporterBeam:
     !byte 119,69,68,91,219
