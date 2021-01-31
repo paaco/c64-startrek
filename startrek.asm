@@ -53,8 +53,6 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr Tmp1 = $0A
 !addr Tmp2 = $0B
 !addr Tmp3 = $0C
-!addr Dx = $0D          ; joystick delta movement (-1,0,1)
-!addr Dy = $0E
 !addr AwayTeam = $10
     TM_CAPTAIN=0        ; head char of captain
     TM_CAPTAIN_HP=1     ; hitpoints
@@ -86,7 +84,7 @@ DebounceJoystick:
             bne -
 .rts1:      rts
 
-; Reads Joystick A/B value (0 active) in A and Joystick variable (clobbers A,X,Y)
+; Reads Joystick A/B value (0 active) in A (111FRLDU) and Joystick variable (clobbers A,X,Y)
 ;  Z=1/X=0 means no (joystick) key pressed
 ; If joystick is not active, scans keyboard
 ReadJoystick:
@@ -233,6 +231,13 @@ INIT:
 
             jmp Start
 
+; 4 sprites
+*=$0440
+    !fill 64,1
+    !fill 64,2
+    !fill 64,3
+    !fill 64,4
+
 ; Logo
 *=$0400 + 11*40
 
@@ -249,6 +254,9 @@ INIT:
 !scr "there are stations to restock and repair"
 !scr "but look out for raiders.               "
 !scr "                                        "
+!scr "by twain pain games / alexander paalvast"
+!scr "                                        "
+!scr "                                        "
 
 ;############################################################################
 *=$07F8     ; SPRITE POINTERS (IN CASE YOU CARE)
@@ -257,7 +265,7 @@ INIT:
 *=$0800     ; CODE
 
 Start:
-            lda #22                     ; DEBUG
+            lda #77                     ; DEBUG
             sta ZP_RNG_LOW              ; DEBUG
 
             ; cls
@@ -375,55 +383,58 @@ loop:
 -           jsr ReadJoystick
             beq -
 
-            ; transform joystick movement
+            ; move team based on Joystick
             ldx #0
-            ldy #0
-            lsr                         ; UP?
-            bcs +
-            dey
-+           lsr                         ; DOWN?
-            bcs +
-            iny
-+           lsr                         ; LEFT?
-            bcs +
-            dex
-+           lsr                         ; RIGHT?
-            bcs +
-            inx
-+           stx Dx
-            sty Dy
-
-            ; move team based on Dx/Dy
-            ldx #0
--           lda AwayTeam+TM_MEMBERS_X,x
+-           stx Tmp2                    ; member#
+            lda AwayTeam+TM_MEMBERS_X,x
             bmi +                       ; dead?
+
+            ldy AwayTeam+TM_MEMBERS_Y,x
+            jsr ErasePersonAt           ; sets cursor and erases person
+            ; fixup cursor for scan around (-41)
+            lda #<($10000-41)
+            ldy #>($10000-41)
+            jsr AddAYToCursor
+
+            lda Joystick
+            and #%00001111              ; RLDU bits only
+            tay
+            ldx JoystickValueToOffset,y ; X=rotation vector
+            ldy RotationOffsets,x       ; Y=offset 1st char
+            tya
             clc
-            adc Dx
+            adc #40
+            sta Tmp1                    ; Tmp1=Y-offset+40 (2nd char offset)
+            ; test characters
+            lda (_CursorPos),y          ; test first char
+            ldy Tmp1
+            ora (_CursorPos),y          ; test 2nd char (technically this allows char #0 too)
+            cmp #CHR_SPACE
+            bne +                       ; No, not possible
+            ; Yes, there is room to move here: X still contains rotation vector
+            ldy DeltaXYData,x           ; Y-modification in Y (-1,0,1)
+            inx
+            inx
+            lda DeltaXYData,x           ; X-modification in A (-1,0,1)
+            ldx Tmp2
+            clc
+            adc AwayTeam+TM_MEMBERS_X,x
             sta AwayTeam+TM_MEMBERS_X,x
-            lda AwayTeam+TM_MEMBERS_Y,x
+            tya
             clc
-            adc Dy
+            adc AwayTeam+TM_MEMBERS_Y,x
             sta AwayTeam+TM_MEMBERS_Y,x
-+           inx
+            ; TODO draw Person again (otherwise you can walk through people)
+
++           ldx Tmp2
+            inx
             cpx #LEN_TM_MEMBERS
             bne -
 
             jmp loop
 
-; TODO: determine new position for member, based on Dx/Dy
-; TODO: ignore self somehow
+; TODO: clip left/right border!
 ; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
-            ; A=X-coord, Y=Y-coord
-            jsr SetCoordinates
-            ldy #0
-            lda (_CursorPos),y
-            ldy #40
-            ora (_CursorPos),y
-            cmp #CHR_SPACE
-            bne +                       ; no
-            ; yes
-+           rts
-
 
 ;----------------------------------------------------------------------------
 ; PLANET
@@ -547,8 +558,14 @@ DrawTransporterAt:
             jsr SetCoordinates
 ; draws a transporter X at the cursor location (clobbers A,Y)
 DrawTransporter:
-            lda TransporterBeam,x
-            ldy #0
+            lda TransporterBeamChars,x
+            bne +                       ; always
+; erases person at cursor in A/Y (clobbers A,Y)
+ErasePersonAt:
+            jsr SetCoordinates
+ErasePerson:
+            lda #CHR_SPACE
++           ldy #0
             sta (_CursorPos),y
             ldy #40
             sta (_CursorPos),y
@@ -663,9 +680,40 @@ PlanetSurfaceData:
     !byte 9,        92,     CHR_SPACE,   24          ; noise (rocks) or space (floor)
     !byte 128,      99,     99,          0           ; status line
 
-TransporterBeam:
+TransporterBeamChars:
     !byte 119,69,68,91,219
-SIZEOF_TRANSPORTERBEAM=*-TransporterBeam
+SIZEOF_TRANSPORTERBEAM=*-TransporterBeamChars
+
+; Screen offsets for 8 rotations, clock wise:
+; 0 1 2
+; 7   3
+; 6 5 4
+RotationOffsets:
+    !byte 0,1,2,42,82,81,80,40
+
+; DY belonging to rotation; use index+2 for DX like sin/cos
+DeltaXYData:
+    !byte -1,-1,-1,0,1,1,1,0
+    !byte -1,-1 ; overflow
+
+; Transform 16 joystick values 111FRLDU (low active) to rotation offsets
+JoystickValueToOffset:
+    !byte 0 ; %0000 illegal
+    !byte 0 ; %0001 illegal
+    !byte 0 ; %0010 illegal
+    !byte 0 ; %0011 illegal
+    !byte 0 ; %0100 illegal
+    !byte 4 ; %0101 RIGHT/DOWN
+    !byte 2 ; %0110 RIGHT/UP
+    !byte 3 ; %0111 RIGHT
+    !byte 0 ; %1000 illegal
+    !byte 6 ; %1001 LEFT/DOWN
+    !byte 0 ; %1010 LEFT/UP
+    !byte 7 ; %1011 LEFT
+    !byte 0 ; %1100 illegal
+    !byte 5 ; %1101 DOWN
+    !byte 1 ; %1110 UP
+    !byte 0 ; %1111 illegal
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
