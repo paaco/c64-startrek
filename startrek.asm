@@ -11,6 +11,13 @@
 ; Without packer it's possible to load and run $0120-$1000 giving 3808 bytes:
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 
+; TODO U64 requires a disk image: C:\Users\Alex\Desktop\emu\GTK3VICE-3.5-win64\bin\c1541 -format diskname,id d64 st.d64 -attach st.d64 -write startrek.prg startrek
+
+; TODO keyboard VICE: pressing two cursor-keys at the same time doesn't work (not sure if that's actually implemented)
+; TODO keyboard U64:  cursor movement appears a lot faster than in VICE, probably because of physical switch bouncing
+; TODO joystick U64:  diagonals don't really work well because of physical switch bouncing on/off a while. should sample multiple times
+; TODO joystick U64:  joystick1 behaves badly due to physical switch bounce that causes the keyboard scanner to activate
+
 DEBUG=0
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
@@ -144,7 +151,7 @@ ReadJoystick:
 ++          lda Joystick        ; end with joystick in A
             tax
             inx                 ; FF+1=0, so Z=1 means no input read
-.stealrts2: rts
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -214,52 +221,111 @@ INIT:
             txs
 
             ; setup VIC
-            lda #%10011011              ; screen on
-            sta $D011
-            lda #0                      ; no sprites
-            sta $D015
-            lda #%00001000              ; hires
-            sta $D016
-            lda #20                     ; uppercase
-            sta $D018
-            lda #COL_BORDER
-            sta $D020
+            ldx #VICDATA_LEN-2
+-           ldy VICData,x
+            lda VICData+1,x
+            sta $D000,y
+            dex
+            dex
+            bpl -
+
+            ; black out text
+            ;ldy #0                      ; Y=0 here because of VIC data
             lda #COL_SCREEN
-            sta $D021
+-           sta $D800,y
+            sta $D900,y
+            sta $D900+160,y
+            iny
+            bne -
+            ; and restore text colors
+            lda #COL_TEXT
+-           sta $D800+10*40,y
+            iny
+            cpy #40
+            bne -
+-           sta $DA08+80,y
+            sta $DB00,y
+            iny
+            bne -
 
             ; TODO setup SID
 
+            ; wait for keypress
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
+
+            lda #0
+            sta $D015                   ; sprites off
             jmp Start
 
+LOGO_SPRITE_Y=86
+VICData:
+    !byte $00,$50
+    !byte $01,LOGO_SPRITE_Y
+    !byte $02,$80
+    !byte $03,LOGO_SPRITE_Y
+    !byte $04,$c0
+    !byte $05,LOGO_SPRITE_Y
+    !byte $06,$f0
+    !byte $07,LOGO_SPRITE_Y
+    !byte $10,0                         ; X-MSB=0
+    !byte $11,%10011011                 ; screen on
+    !byte $15,%00001111                 ; 4 sprite logo
+    !byte $16,%00001000                 ; hires
+    !byte $17,%00001111                 ; sprite expand Y
+    !byte $18,20                        ; uppercase
+    !byte $1C,0                         ; sprites hires
+    !byte $1D,%00001111                 ; sprite expand X
+    !byte $20,COL_BORDER
+    !byte $21,COL_SCREEN
+    !byte $27,COL_TEXT
+    !byte $28,COL_TEXT
+    !byte $29,COL_TEXT
+    !byte $2A,COL_TEXT
+VICDATA_LEN = *-VICData
+
 ; 4 sprites
-*=$0440
-    !fill 64,1
-    !fill 64,2
-    !fill 64,3
-    !fill 64,4
+*=$0480
+; Sprite2asm 'startrek-bg0.png' on 04-Feb-2021 16:33:39
+; 0 (0,0)
+!byte $ff,$ef,$fe,$7f,$e7,$fe,$78,$e0,$e0,$78,$e0,$f0,$78,$80,$f0,$78,$00,$f0,$78,$00,$f0,$78,$60,$f0
+!byte $79,$e0,$f0,$77,$e0,$f0,$7e,$e0,$f0,$79,$e0,$f0,$61,$e0,$f0,$01,$e0,$f0,$01,$e0,$f0,$11,$e0,$f0
+!byte $71,$e0,$f0,$71,$e0,$f0,$7f,$e0,$f0,$3f,$c0,$f0,$00,$00,$00,$00
+; 1 (24,0)
+!byte $ff,$cf,$f8,$7f,$e7,$fc,$79,$e7,$9c,$79,$e7,$9c,$79,$e7,$9c,$79,$e7,$9c,$79,$e7,$9c,$79,$e7,$b8
+!byte $79,$e7,$e6,$7b,$e7,$9e,$7f,$e7,$fe,$7d,$e7,$de,$79,$e7,$9e,$71,$e7,$9e,$79,$e7,$9e,$79,$e7,$9e
+!byte $79,$e7,$9e,$79,$e7,$9e,$79,$e7,$9e,$79,$e7,$9e,$00,$00,$00,$00
+; 2 (48,0)
+!byte $ff,$ef,$f8,$7f,$e7,$fc,$0e,$07,$9c,$0f,$07,$9c,$0f,$07,$9c,$0f,$07,$9c,$0f,$07,$9c,$0f,$07,$b8
+!byte $0f,$07,$e6,$0f,$07,$9e,$0f,$07,$fe,$0f,$07,$de,$0f,$07,$9e,$0f,$07,$9e,$0f,$07,$9e,$0f,$07,$9e
+!byte $0f,$07,$9e,$0f,$07,$9e,$0f,$07,$9e,$0f,$07,$9e,$00,$00,$00,$00
+; 3 (72,0)
+!byte $ff,$ef,$9e,$7f,$e7,$9e,$78,$07,$9e,$78,$07,$9e,$78,$07,$9e,$78,$07,$9e,$78,$07,$9e,$79,$87,$be
+!byte $7f,$87,$f8,$7e,$07,$f8,$78,$07,$b8,$70,$07,$3c,$78,$07,$bc,$78,$07,$bc,$78,$07,$9e,$78,$07,$9e
+!byte $78,$07,$9e,$78,$07,$8f,$7f,$e7,$8f,$3f,$e7,$8f,$00,$00,$00,$00
 
 ; Logo
-*=$0400 + 11*40
+*=$0400 + 10*40
+!scr "                last hope               "
 
-!scr "                                        "
-!scr "          star trek: last hope          "
-!scr "                                        "
+; MAX 80 bytes of data
 
+*=$0400 + 16*40
      ;1234567890123456789012345678901234567890
-!scr "captain's log, stardate 30321.1. the uss"
-!scr "firebird with its crew of elite captains"
-!scr "has arrived at ds709. the admiral will  "
-!scr "join us and lead away teams to find the "
-!scr "3 relics that can save the human race.  "
-!scr "there are stations to restock and repair"
-!scr "but look out for raiders.               "
+!scr "captain's log, stardate 30321.1         "
 !scr "                                        "
-!scr "by twain pain games / alexander paalvast"
+!scr " the uss firebird has arrived at ds709. "
+!scr " they need *you* to lead the away teams "
+!scr " with elite captains to find 3 relics   "
+!scr " that can save planet earth.            "
+!scr " fight raiders. restock at stations.    "
 !scr "                                        "
-!scr "                                        "
+!scr "by alexander paalvast / twain pain games"
 
 ;############################################################################
-*=$07F8     ; SPRITE POINTERS (IN CASE YOU CARE)
+*=$07F8     ; SPRITE POINTERS
+    !byte $0480/64,$04C0/64,$0500/64,$0540/64,0,0,0,0
 
 ;############################################################################
 *=$0800     ; CODE
@@ -304,9 +370,13 @@ Start:
             jsr DrawGfxObject
             ; end with the space ship
             lda #2+16;<($0400+6*40+2)
-            ldy #6;>($0400+6*40+2)
+            ldy #17;>($0400+6*40+2)
             ldx #G_SPACESHIP
             jsr DrawGfxObject
+
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
 
             jsr DrawPlanetSurface
 
@@ -336,9 +406,9 @@ Start:
             sta AwayTeam+TM_MEMBERS_X+3
             sta AwayTeam+TM_MEMBERS_X+4
 
-            jsr DebounceJoystick
--           jsr ReadJoystick
-            beq -
+;             jsr DebounceJoystick
+; -           jsr ReadJoystick
+;             beq -
 
             ; transporting all members of the away team at the same time
             lda #0
@@ -398,6 +468,7 @@ loop:
 
             lda Joystick
             and #%00001111              ; RLDU bits only
+            sta $0400                   ; DEBUG
             tay
             ldx JoystickValueToOffset,y ; X=rotation vector
             ldy RotationOffsets,x       ; Y=offset 1st char
@@ -663,7 +734,7 @@ GfxData:
 
 ; names of captains (each starts with a unique character)
 CrewNames:
-    !scr "kirk","jluc","cath","arch","mikl","saru"
+    !scr "kirk","pcar","jway","arch","saru","mkal"
 
 SectorOffsetData:
     !byte 0,8,16,24,32,39
