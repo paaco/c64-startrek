@@ -20,7 +20,6 @@
 
 DEBUG=0
 !ifndef DEBUG {DEBUG=0}
-!ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
     !initmem $AA
 }
@@ -42,8 +41,8 @@ LIGHT_GREEN=13
 LIGHT_BLUE=14
 LIGHT_GREY=15
 ; colors
-COL_BORDER=BLACK
-COL_SCREEN=BLACK
+COL_BORDER=GREEN ; only used on surface
+COL_SCREEN=BLACK ; also border in space
 COL_TEXT=GREEN
 ; constants
 CHR_SPACE=32+DEBUG*10 ; space or star
@@ -62,16 +61,121 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr Tmp3 = $0C
 !addr AwayTeam = $10
     TM_CAPTAIN=0        ; head char of captain
-    TM_CAPTAIN_HP=1     ; hitpoints
+    TM_CAPTAIN_NAME=1   ; text name of captain
     LEN_TM_MEMBERS=5    ; SoA of members
     TM_MEMBERS_X=2      ; array of X-offset for 5 members (<0 means member is dead)
     TM_MEMBERS_Y=7      ; array of Y-offset for 5 members
     SIZEOF_TM=12
+!addr EnemyTeam = $20
+!addr ShipX = $2C       ; screen pos X = sector left + random
+!addr ShipY = $2D       ; screen pos Y = sector top + random
 
 ;############################################################################
 *=$0120     ; DATA (0120-01ED = 205 bytes)
 
-            !fill 205,$EE ; remaining
+GO_OFFSET=0
+GO_WIDTH=1
+GO_HEIGHT=2
+GfxObjectsData:
+    G_SPACESHIP=*-GfxObjectsData
+    !byte _gSpaceship,5,3
+    G_DS9=*-GfxObjectsData
+    !byte _gDS9,6,5
+    G_PLANET=*-GfxObjectsData
+    !byte _gPlanet,3,3
+    G_STATION=*-GfxObjectsData
+    !byte _gStation,3,3
+    G_RAIDER=*-GfxObjectsData
+    !byte _gTinyShip,3,1
+    G_ENEMYSHIP=*-GfxObjectsData
+    !byte _gEnemyShip,3,2
+    G_TEMPLE=*-GfxObjectsData
+    !byte _gTemple,3,6
+
+GfxData:
+    !byte CHR_SPACE                     ; X should stay 0 for erase object
+    _gSpaceship=*-GfxData ; 5x3
+    !byte 226,236,78,119,77
+    !byte 225,160,116,15,106
+    !byte 98,252,77,111,78
+    _gDS9=*-GfxData ; 6x5
+    !byte 32,255,103,101,127,32
+    !byte 225,108,225,97,123,97
+    !byte 160,64,160,160,64,160
+    !byte 225,124,225,97,126,97
+    !byte 32,127,103,101,255,32
+    _gPlanet=*-GfxData ; 3x3
+    !byte 108,64,123
+    !byte 93,102,93
+    !byte 124,64,126
+    _gStation=*-GfxData ; 3x3
+    !byte 233,98,223
+    !byte 225,209,97
+    !byte 95,226,105
+    _gTinyShip=*-GfxData ; 3x1
+    !byte 60,120,62
+    _gEnemyShip=*-GfxData ; 3x2
+    !byte 79,197,80
+    !byte 77,32,78
+    _gTemple=*-GfxData ; 4x3
+    !byte 85,70,73
+    !byte 213,145,201
+    !byte 93,32,66
+    !byte 93,32,66
+    !byte 32,32,32 ; some space to be able to enter the temple
+    !byte 32,32,32
+
+SectorOffsetData:
+    !byte 0,8,16,24,32,39
+
+; 25 screen line offsets packed in a single byte
+PackedLineOffsets:
+    !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
+
+PlanetSurfaceData:
+        ; % (/256)  char    otherwise    next switch
+    !byte 30,       46,     CHR_SPACE,   -1          ; dot (tiny star) or space
+    !byte 80,       223,    233,         10          ; /| and |\ chars (peaks)
+    !byte 80,       81+128, 160,         12          ; reversed ball (hole) or rock 81+128 160
+    !byte 9,        92,     CHR_SPACE,   24          ; noise (rocks) or space (floor)
+    !byte 128,      99,     99,          0           ; status line
+
+TransporterBeamChars:
+    !byte 119,69,68,91,219
+SIZEOF_TRANSPORTERBEAM=*-TransporterBeamChars
+
+; Screen offsets for 8 rotations, clock wise:
+; 0 1 2
+; 7   3
+; 6 5 4
+RotationOffsets:
+    !byte 0,1,2,42,82,81,80,40
+
+; DY belonging to rotation; use index+2 for DX like sin/cos
+DeltaXYData:
+    !byte -1,-1,-1,0,1,1,1,0
+    !byte -1,-1 ; overflow
+
+; Transform 16 joystick values 111FRLDU (low active) to rotation offsets
+JoystickValueToOffset:
+    !byte 0 ; %0000 illegal
+    !byte 0 ; %0001 illegal
+    !byte 0 ; %0010 illegal
+    !byte 0 ; %0011 illegal
+    !byte 0 ; %0100 illegal
+    !byte 4 ; %0101 RIGHT/DOWN
+    !byte 2 ; %0110 RIGHT/UP
+    !byte 3 ; %0111 RIGHT
+    !byte 0 ; %1000 illegal
+    !byte 6 ; %1001 LEFT/DOWN
+    !byte 0 ; %1010 LEFT/UP
+    !byte 7 ; %1011 LEFT
+    !byte 0 ; %1100 illegal
+    !byte 5 ; %1101 DOWN
+    !byte 1 ; %1110 UP
+    !byte 0 ; %1111 illegal
+
+            !fill 3,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
@@ -203,7 +307,33 @@ Random:
             !byte $ed,$f6 ; STOP vector - Essential to avoid JAM
 
             ; DATA (032A-0400 = 214 bytes)
-            !fill 214,$EE ; remaining
+
+;----------------------------------------------------------------------------
+; TEXTS
+;----------------------------------------------------------------------------
+
+TextData:
+    !byte CHR_SPACE                     ; X should stay 0 to erase text
+    T_WHERETO=*-TextData
+    !scr "wesley: where to now",'?'+128
+    T_LETSGO=*-TextData
+    !scr ": an m-class planet! lets beam down",'!'+128
+    T_RAIDERS=*-TextData
+    !scr "spock: sensors detect raiders",'!'+128
+    T_STATION=*-TextData
+    !scr "restocked at the statio",'n'+128
+    T_KIRK=*-TextData
+    !scr "kir",'k'+128
+    T_JLUC=*-TextData
+    !scr "jlu",'c'+128
+    T_KATH=*-TextData
+    !scr "kat",'h'+128
+    T_ARCH=*-TextData
+    !scr "arc",'h'+128
+    T_SARU=*-TextData
+    !scr "sar",'u'+128
+    T_MIKL=*-TextData
+    !scr "mik",'l'+128
 
 ;############################################################################
 *=$0400     ; SCREEN (WILL BE WIPED)
@@ -250,40 +380,24 @@ INIT:
 
             ; TODO setup SID
 
-            ; wait for keypress
+            ; setup SID for random
+            lda #$FF ; voice3 max freq
+            sta $D40E
+            sta $D40F
+            lda #$81
+            sta $D418 ; cut off voice3
+            sta $D412 ; voice3 gate-on noise
+
+            ; wait for keypress and init random
             jsr DebounceJoystick
--           jsr ReadJoystick
+-           lda $D41B
+            sta ZP_RNG_LOW
+            jsr ReadJoystick
             beq -
 
             lda #0
             sta $D015                   ; sprites off
             jmp Start
-
-LOGO_SPRITE_Y=86
-VICData:
-    !byte $00,$50
-    !byte $01,LOGO_SPRITE_Y
-    !byte $02,$80
-    !byte $03,LOGO_SPRITE_Y
-    !byte $04,$c0
-    !byte $05,LOGO_SPRITE_Y
-    !byte $06,$f0
-    !byte $07,LOGO_SPRITE_Y
-    !byte $10,0                         ; X-MSB=0
-    !byte $11,%10011011                 ; screen on
-    !byte $15,%00001111                 ; 4 sprite logo
-    !byte $16,%00001000                 ; hires
-    !byte $17,%00001111                 ; sprite expand Y
-    !byte $18,20                        ; uppercase
-    !byte $1C,0                         ; sprites hires
-    !byte $1D,%00001111                 ; sprite expand X
-    !byte $20,COL_BORDER
-    !byte $21,COL_SCREEN
-    !byte $27,COL_TEXT
-    !byte $28,COL_TEXT
-    !byte $29,COL_TEXT
-    !byte $2A,COL_TEXT
-VICDATA_LEN = *-VICData
 
 ; 4 sprites
 *=$0480
@@ -309,7 +423,35 @@ VICDATA_LEN = *-VICData
 *=$0400 + 10*40
 !scr "                last hope               "
 
-; MAX 80 bytes of data
+; MAX 5*40 = 200 bytes of init data (will be wiped)
+
+LOGO_SPRITE_Y=86
+VICData:
+    !byte $00,$50
+    !byte $01,LOGO_SPRITE_Y
+    !byte $02,$80
+    !byte $03,LOGO_SPRITE_Y
+    !byte $04,$c0
+    !byte $05,LOGO_SPRITE_Y
+    !byte $06,$f0
+    !byte $07,LOGO_SPRITE_Y
+    !byte $10,0                         ; X-MSB=0
+    !byte $11,%10011011                 ; screen on
+    !byte $15,%00001111                 ; 4 sprite logo
+    !byte $16,%00001000                 ; hires
+    !byte $17,%00001111                 ; sprite expand Y
+    !byte $18,20                        ; uppercase
+    !byte $1C,0                         ; sprites hires
+    !byte $1D,%00001111                 ; sprite expand X
+    !byte $20,COL_SCREEN                ; starting in outer space
+    !byte $21,COL_SCREEN                ; both colors are the same
+    !byte $27,COL_TEXT
+    !byte $28,COL_TEXT
+    !byte $29,COL_TEXT
+    !byte $2A,COL_TEXT
+VICDATA_LEN = *-VICData
+
+    !fill 156,$EE ; remaining
 
 *=$0400 + 16*40
      ;1234567890123456789012345678901234567890
@@ -331,9 +473,13 @@ VICDATA_LEN = *-VICData
 *=$0800     ; CODE
 
 Start:
-            lda #77                     ; DEBUG
-            sta ZP_RNG_LOW              ; DEBUG
+            ; init game
+            lda #18
+            sta ShipX
+            ldy #5
+            sty ShipY
 
+BackIntoSpace:
             ; cls
             ldx #0
 -           lda #COL_TEXT
@@ -350,6 +496,8 @@ Start:
             bne -
 
             ; draw space screen
+            lda #COL_SCREEN
+            sta $D020                   ; in space everything looks the same
             jsr DrawSectorMarks
             ; draw loop over all objects
             lda #1;<($0400+0*40+1)
@@ -369,15 +517,59 @@ Start:
             ldx #G_PLANET
             jsr DrawGfxObject
             ; end with the space ship
-            lda #2+16;<($0400+6*40+2)
-            ldy #17;>($0400+6*40+2)
+            lda ShipX
+            ldy ShipY
             ldx #G_SPACESHIP
             jsr DrawGfxObject
+
+            ldx #T_WHERETO
+            lda #0
+            ldy #24
+            jsr DrawText
 
             jsr DebounceJoystick
 -           jsr ReadJoystick
             beq -
 
+            ; TODO move ship in the direction of the joystick
+--          lda ShipX
+            ldy ShipY
+            ldx #G_SPACESHIP
+            jsr DrawGfxObject
+
+!if DEBUG=0 {
+-           lda #$F0
+            cmp $D012
+            bne -
+}
+            ; DEBUG simulate movement
+            dec ShipX   ; DEBUG
+            ;inc ShipY   ; DEBUG
+            lda ShipX
+            cmp #2
+            bne --
+
+;             jsr DebounceJoystick
+; -           jsr ReadJoystick
+;             beq -
+
+            ;jmp BackIntoSpace
+
+            ldx #T_JLUC
+            lda #0
+            ldy #24
+            jsr DrawText
+            ldx #T_LETSGO
+            lda #4
+            ldy #24
+            jsr DrawText
+
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
+
+            lda #COL_BORDER
+            sta $D020
             jsr DrawPlanetSurface
 
             lda #36
@@ -388,8 +580,8 @@ Start:
             ; DEBUG setup away team
             lda #'J'-64                 ; JLUC
             sta AwayTeam+TM_CAPTAIN
-            lda #1
-            sta AwayTeam+TM_CAPTAIN_HP
+            lda #T_JLUC
+            sta AwayTeam+TM_CAPTAIN_NAME
             lda #13
             sta AwayTeam+TM_MEMBERS_X+0
             lda #18
@@ -427,8 +619,11 @@ Start:
             bne -
             ; visual delay
             ldy #TRANSPORTER_DELAY
--           cpy $d012
+-
+!if DEBUG=0 {
+            cpy $D012
             bne -
+}
             dey
             bne -
             inc Tmp2
@@ -452,6 +647,8 @@ loop:
             jsr DebounceJoystick
 -           jsr ReadJoystick
             beq -
+
+            jmp BackIntoSpace
 
             ; move team based on Joystick
             ldx #0
@@ -583,7 +780,7 @@ DrawSectorMarks:
 
 ; erase object X at A/Y
 EraseGfxObject:
-; TODO: alter routine below to erase (lda #CHR_SPACE instead of lda GfxData,x)
+; TODO: alter routine below to erase: lda GfxData ($AD) instead of lda GfxData,x ($BD)
 
 ; draw object X at A/Y
 DrawGfxObject:
@@ -596,7 +793,7 @@ DrawGfxObject:
             tax
 ; TODO put this drawing part of routine in ZP (ObjWidth and ObjHeight and maybe Cursor will be inside)
 --          ldy #0
--           lda GfxData,x
+-           lda GfxData,x               ; SELF-MODIFIED $BD=lda,x / $AD=lda
             inx
             sta (_CursorPos),y
             iny
@@ -678,113 +875,27 @@ AddAYToCursor:
 
 
 ;--------------------------------------------------------------
-; DATA
+; TEXT
 ;--------------------------------------------------------------
 
-*=$0F00
+; Puts text in X at coordinates A/Y (slowly) (clobbers A,X,Y)
+DrawText:
+            jsr SetCoordinates
+            ldy #0
+--          lda TextData,x
+            bpl +                       ; last?
+            and #$7F                    ; yup
+            ldx #$FF                    ; stop loop
++           sta (_CursorPos),y
+            iny
+!if DEBUG=0 {
+-           cmp $D012
+            bne -
+}
+            inx
+            bne --
+            rts
 
-GO_OFFSET=0
-GO_WIDTH=1
-GO_HEIGHT=2
-GfxObjectsData:
-    G_SPACESHIP=*-GfxObjectsData
-    !byte _gSpaceship,5,3
-    G_DS9=*-GfxObjectsData
-    !byte _gDS9,6,5
-    G_PLANET=*-GfxObjectsData
-    !byte _gPlanet,3,3
-    G_STATION=*-GfxObjectsData
-    !byte _gStation,3,3
-    G_RAIDER=*-GfxObjectsData
-    !byte _gTinyShip,3,1
-    G_ENEMYSHIP=*-GfxObjectsData
-    !byte _gEnemyShip,3,2
-    G_TEMPLE=*-GfxObjectsData
-    !byte _gTemple,3,4
-
-GfxData:
-    _gSpaceship=*-GfxData ; 5x3
-    !byte 226,236,78,119,77
-    !byte 225,160,116,15,106
-    !byte 98,252,77,111,78
-    _gDS9=*-GfxData ; 6x5
-    !byte 32,255,103,101,127,32
-    !byte 225,108,225,97,123,97
-    !byte 160,64,160,160,64,160
-    !byte 225,124,225,97,126,97
-    !byte 32,127,103,101,255,32
-    _gPlanet=*-GfxData ; 3x3
-    !byte 108,64,123
-    !byte 93,102,93
-    !byte 124,64,126
-    _gStation=*-GfxData ; 3x3
-    !byte 233,98,223
-    !byte 225,209,97
-    !byte 95,226,105
-    _gTinyShip=*-GfxData ; 3x1
-    !byte 60,120,62
-    _gEnemyShip=*-GfxData ; 3x2
-    !byte 79,197,80
-    !byte 77,32,78
-    _gTemple=*-GfxData ; 4x3
-    !byte 85,70,73
-    !byte 213,145,201
-    !byte 93,32,66
-    !byte 93,32,66
-
-; names of captains (each starts with a unique character)
-CrewNames:
-    !scr "kirk","pcar","jway","arch","saru","mkal"
-
-SectorOffsetData:
-    !byte 0,8,16,24,32,39
-
-; 25 screen line offsets packed in a single byte
-PackedLineOffsets:
-    !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
-
-PlanetSurfaceData:
-        ; % (/256)  char    otherwise    next switch
-    !byte 30,       46,     CHR_SPACE,   -1          ; dot (tiny star) or space
-    !byte 80,       223,    233,         10          ; /| and |\ chars (peaks)
-    !byte 80,       81+128, 160,         12          ; reversed ball (hole) or rock 81+128 160
-    !byte 9,        92,     CHR_SPACE,   24          ; noise (rocks) or space (floor)
-    !byte 128,      99,     99,          0           ; status line
-
-TransporterBeamChars:
-    !byte 119,69,68,91,219
-SIZEOF_TRANSPORTERBEAM=*-TransporterBeamChars
-
-; Screen offsets for 8 rotations, clock wise:
-; 0 1 2
-; 7   3
-; 6 5 4
-RotationOffsets:
-    !byte 0,1,2,42,82,81,80,40
-
-; DY belonging to rotation; use index+2 for DX like sin/cos
-DeltaXYData:
-    !byte -1,-1,-1,0,1,1,1,0
-    !byte -1,-1 ; overflow
-
-; Transform 16 joystick values 111FRLDU (low active) to rotation offsets
-JoystickValueToOffset:
-    !byte 0 ; %0000 illegal
-    !byte 0 ; %0001 illegal
-    !byte 0 ; %0010 illegal
-    !byte 0 ; %0011 illegal
-    !byte 0 ; %0100 illegal
-    !byte 4 ; %0101 RIGHT/DOWN
-    !byte 2 ; %0110 RIGHT/UP
-    !byte 3 ; %0111 RIGHT
-    !byte 0 ; %1000 illegal
-    !byte 6 ; %1001 LEFT/DOWN
-    !byte 0 ; %1010 LEFT/UP
-    !byte 7 ; %1011 LEFT
-    !byte 0 ; %1100 illegal
-    !byte 5 ; %1101 DOWN
-    !byte 1 ; %1110 UP
-    !byte 0 ; %1111 illegal
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
