@@ -12,11 +12,7 @@
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 
 ; TODO U64 requires a disk image: C:\Users\Alex\Desktop\emu\GTK3VICE-3.5-win64\bin\c1541 -format diskname,id d64 st.d64 -attach st.d64 -write startrek.prg startrek
-
-; TODO keyboard VICE: pressing two cursor-keys at the same time doesn't work (not sure if that's actually implemented)
-; TODO keyboard U64:  cursor movement appears a lot faster than in VICE, probably because of physical switch bouncing
 ; TODO joystick U64:  diagonals don't really work well because of physical switch bouncing on/off a while. should sample multiple times
-; TODO joystick U64:  joystick1 behaves badly due to physical switch bounce that causes the keyboard scanner to activate
 
 DEBUG=0
 !ifndef DEBUG {DEBUG=0}
@@ -59,6 +55,7 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr Tmp1 = $0A
 !addr Tmp2 = $0B
 !addr Tmp3 = $0C
+!addr PrevJoystick = $0D
 !addr AwayTeam = $10
     TM_CAPTAIN=0        ; head char of captain
     TM_CAPTAIN_NAME=1   ; text name of captain
@@ -193,66 +190,27 @@ JoystickValueToOffset:
 DebounceJoystick:
 -           jsr ReadJoystick
             bne -
-.rts1:      rts
+            rts
 
 ; Reads Joystick A/B value (0 active) in A (111FRLDU) and Joystick variable (clobbers A,X,Y)
 ;  Z=1/X=0 means no (joystick) key pressed
-; If joystick is not active, scans keyboard
 ReadJoystick:
             ; disconnect keyboard
             lda #%11111111
             sta $DC00
             ; scan joysticks
-            lda $DC00           ; Joystick A in control port 2 0=active: 1=up 2=down 4=left 8=right 16=fire
+-           lda $DC00           ; Joystick A in control port 2 0=active: 1=up 2=down 4=left 8=right 16=fire
             and $DC01           ; Joystick B in control port 1 0=active: 1=up 2=down 4=left 8=right 16=fire
             ora #%11100000      ; ignore other bits ==> $FF is nothing pressed
-            sta Joystick
-            tax
-            inx                 ; FF+1=0, so Z=1 means no input read
-            bne .rts1           ; found joystick movement => done
-            ; fall through
-
-; Reads keyboard and emulates joystick with Cursor, (right) Shift and Return keys (clobbers A,X,Y)
-            ; scan keyboard
-            lda #%10111110      ; rows 0 and 6: 7=C_U/D 4=S_R 2=C_L/R 1=CR
-            sta $DC00
-            ; (Not implemented) row 1 >>2 |Bit 1| S_L |  E  |  S  |  Z  |  4  |  A  |  W  |  3  |
-            ; (Not implemented) row 7 >>1 |Bit 7| R/S |  Q  |  C= |SPACE|  2  | CTRL|A_LFT|  1  |
-            lda $DC01
-            ora #%01101001      ; ignore other bits ==> $FF is nothing pressed
-            eor #%11111111      ; 1-active is easier to test double bits
-            tay                 ; backup
-            ; Fire
-            ldx #%11111111
-            and #%00001010      ; CR or SPACE?
-            beq +               ; no
-            ldx #%11101111      ; FIRE
-+           stx Joystick
-            ; Up/Down
-            tya
-            and #%10000000      ; C_U/D?
-            beq ++              ; no
-            ldx #%11111101      ; DOWN
-            tya
-            and #%00011000      ; SHIFT?
-            beq +               ; no
-            inx                 ; UP (%11111110)
-+           txa
-            and Joystick
-            sta Joystick
-++          ; Left/Right
-            tya
-            and #%00000100      ; C_L/R?
-            beq ++              ; no
-            ldx #%11110111      ; RIGHT
-            tya
-            and #%00011000      ; SHIFT?
-            beq +               ; no
-            ldx #%11111011      ; LEFT
-+           txa
-            and Joystick
-            sta Joystick
-++          lda Joystick        ; end with joystick in A
+            cmp PrevJoystick
+            beq +               ; same => OK
+!if DEBUG=0 {
+--          cmp $D012
+            bne --
+}
+            sta PrevJoystick
+            bne -               ; always
++           sta Joystick
             tax
             inx                 ; FF+1=0, so Z=1 means no input read
             rts
@@ -279,7 +237,7 @@ Random:
             sta ZP_RNG_HIGH ; x ^= x << 8 done
             rts
 
-            !fill 15,$EE ; remaining
+            !fill 67,$EE ; remaining
 
 ;############################################################################
 *=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
@@ -648,16 +606,16 @@ loop:
 -           jsr ReadJoystick
             beq -
 
-            jmp BackIntoSpace
+            ;jmp BackIntoSpace
 
             ; move team based on Joystick
             ldx #0
 -           stx Tmp2                    ; member#
             lda AwayTeam+TM_MEMBERS_X,x
-            bmi +                       ; dead?
+            bmi ++                      ; dead?
 
             ldy AwayTeam+TM_MEMBERS_Y,x
-            jsr ErasePersonAt           ; sets cursor and erases person
+            jsr ErasePersonAt           ; sets cursor and erases person (to be able to walk through yourself)
             ; fixup cursor for scan around (-41)
             lda #<($10000-41)
             ldy #>($10000-41)
@@ -665,7 +623,6 @@ loop:
 
             lda Joystick
             and #%00001111              ; RLDU bits only
-            sta $0400                   ; DEBUG
             tay
             ldx JoystickValueToOffset,y ; X=rotation vector
             ldy RotationOffsets,x       ; Y=offset 1st char
@@ -678,7 +635,7 @@ loop:
             ldy Tmp1
             ora (_CursorPos),y          ; test 2nd char (technically this allows char #0 too)
             cmp #CHR_SPACE
-            bne +                       ; No, not possible
+            bne ++                      ; No, not possible
             ; Yes, there is room to move here: X still contains rotation vector
             ldy DeltaXYData,x           ; Y-modification in Y (-1,0,1)
             inx
@@ -687,21 +644,26 @@ loop:
             ldx Tmp2
             clc
             adc AwayTeam+TM_MEMBERS_X,x
-            sta AwayTeam+TM_MEMBERS_X,x
+            ; clip X at 0..39
+            bpl +
+            lda #0
++           cmp #40
+            bne +
+            lda #39
++           sta AwayTeam+TM_MEMBERS_X,x
             tya
             clc
             adc AwayTeam+TM_MEMBERS_Y,x
             sta AwayTeam+TM_MEMBERS_Y,x
             ; TODO draw Person again (otherwise you can walk through people)
 
-+           ldx Tmp2
+++          ldx Tmp2
             inx
             cpx #LEN_TM_MEMBERS
             bne -
 
             jmp loop
 
-; TODO: clip left/right border!
 ; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
 
 ;----------------------------------------------------------------------------
