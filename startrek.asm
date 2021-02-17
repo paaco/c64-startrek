@@ -36,6 +36,23 @@ GREY=12
 LIGHT_GREEN=13
 LIGHT_BLUE=14
 LIGHT_GREY=15
+; SID registers
+!addr SID = $D400
+FL = 0
+FH = 1
+PL = 2
+PH = 3
+WV = 4
+AD = 5
+SR = 6
+V1 = 0
+V2 = 7
+V3 = 14
+FILT_LO = $15
+FILT_HI = $16
+FILT_VOICES = $17
+FILT_VOL = $18
+OSC3 = $1B
 ; colors
 COL_BORDER=GREEN ; only used on surface
 COL_SCREEN=BLACK ; also border in space
@@ -336,26 +353,21 @@ INIT:
             iny
             bne -
 
-            ; TODO setup SID
-
-            ; setup SID for random
-            lda #$FF ; voice3 max freq
-            sta $D40E
-            sta $D40F
+            ; setup SID
+            lda #$8F                    ; $80 to cut off voice3
+            sta SID+FILT_VOL
+            lda #$FF                    ; voice3 max freq for random
+            sta SID+V3+FL
+            sta SID+V3+FH
             lda #$81
-            sta $D418 ; cut off voice3
-            sta $D412 ; voice3 gate-on noise
+            sta SID+V3+WV               ; voice3 gate-on noise for random
 
-            ; wait for keypress and init random
-            jsr DebounceJoystick
--           lda $D41B
-            sta ZP_RNG_LOW
-            jsr ReadJoystick
-            beq -
+            lda #$6A
+            sta SID+AD
+            lda #$94
+            sta SID+SR
 
-            lda #0
-            sta $D015                   ; sprites off
-            jmp Start
+            jmp PlayFanfare
 
 ; 4 sprites
 *=$0480
@@ -383,6 +395,50 @@ INIT:
 
 ; MAX 5*40 = 200 bytes of init data (will be wiped)
 
+PlayFanfare:
+            ldx #0
+--          lda NotesLow,x
+            sta SID+FL
+            lda NotesHigh,x
+            sta SID+FH
+
+            lda #$21
+            sta SID+WV
+
+            ldy NotesDuration,x
+-           lda #$80
+            cmp $D012
+            bne -
+---         cmp $D012
+            beq ---
+            ; update random seed
+            lda SID+OSC3
+            sta ZP_RNG_LOW
+            ; test joystick button
+            lda $DC00           ; Joystick A in control port 2 0=active: 1=up 2=down 4=left 8=right 16=fire
+            and $DC01           ; Joystick B in control port 1 0=active: 1=up 2=down 4=left 8=right 16=fire
+            and #%00010000      ; 111FRLDU FIRE is pressed when A=0
+            beq ++
+            dey
+            cpy #4                      ; gate-off frames left
+            bne +
+            lda #$20
+            sta SID+WV
++           cpy #0
+            bne -
+            inx
+            cpx #11
+            bne --
+
+-           jsr ReadJoystick
+            and #%00010000      ; 111FRLDU FIRE is pressed when A=0
+            bne -
+
+++          lda #0
+            sta $D015                   ; sprites off
+            sta SID+V1+WV               ; gate off
+            jmp Start
+
 LOGO_SPRITE_Y=86
 VICData:
     !byte $00,$50
@@ -409,7 +465,24 @@ VICData:
     !byte $2A,COL_TEXT
 VICDATA_LEN = *-VICData
 
-    !fill 156,$EE ; remaining
+    ; Star Trek fanfare
+    ; F-3(6) Bb3(2) Eb4(6) D-4(4) Bb3(2) G-3(2) C-4(2) F-4(4) | F-4(2) Ab4(10)
+    F_3=$0b9e
+    G_3=$0d0a
+    Bb3=$0f82
+    C_4=$1168
+    D_4=$138a
+    Eb4=$14b3
+    F_4=$173c
+    Ab4=$1ba2
+NotesLow:
+    !byte 0,<F_3,<Bb3,<Eb4,<D_4,<Bb3,<G_3,<C_4,<F_4,<F_4,<Ab4
+NotesHigh:
+    !byte 0,>F_3,>Bb3,>Eb4,>D_4,>Bb3,>G_3,>C_4,>F_4,>F_4,>Ab4
+NotesDuration:
+    !byte 4*10,6*10,2*10,6*10,4*10,2*10,2*10,2*10,4*10,2*10,10*10
+
+    !fill 37,$EE ; remaining
 
 *=$0400 + 16*40
      ;1234567890123456789012345678901234567890
