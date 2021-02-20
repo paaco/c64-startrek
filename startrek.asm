@@ -91,8 +91,10 @@ GO_OFFSET=0
 GO_WIDTH=1
 GO_HEIGHT=2
 GfxObjectsData:
-    G_SPACESHIP=*-GfxObjectsData
-    !byte _gSpaceship,5,3
+    G_SPACESHIPR=*-GfxObjectsData
+    !byte _gSpaceshipR,5,3
+    G_SPACESHIPL=*-GfxObjectsData
+    !byte _gSpaceshipL,5,3
     G_DS9=*-GfxObjectsData
     !byte _gDS9,6,5
     G_PLANET=*-GfxObjectsData
@@ -108,10 +110,14 @@ GfxObjectsData:
 
 GfxData:
     !byte CHR_SPACE                     ; X should stay 0 for erase object
-    _gSpaceship=*-GfxData ; 5x3
+    _gSpaceshipR=*-GfxData ; 5x3
     !byte 226,236,78,119,77
     !byte 225,160,116,15,106
     !byte 98,252,77,111,78
+    _gSpaceshipL=*-GfxData ; 5x3
+    !byte 78,119,77,251,226
+    !byte 116,15,106,160,97
+    !byte 77,111,78,254,98
     _gDS9=*-GfxData ; 6x5
     !byte 32,255,103,101,127,32
     !byte 225,108,225,97,123,97
@@ -158,6 +164,17 @@ TransporterBeamChars:
     !byte 119,69,68,91,219
 SIZEOF_TRANSPORTERBEAM=*-TransporterBeamChars
 
+            !fill 19,$EE ; remaining
+
+;############################################################################
+*=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
+            !fill 11,0
+*=$01F8     ; Override return value on stack with own start address
+            !word INIT-1
+
+;############################################################################
+*=$01FA     ; DATA (01FA-0276 = 125 bytes)
+
 ; Screen offsets for 8 rotations, clock wise:
 ; 0 1 2
 ; 7   3
@@ -172,37 +189,32 @@ DeltaXYData:
 
 ; Transform 16 joystick values 111FRLDU (low active) to rotation offsets
 JoystickValueToOffset:
-    !byte 0 ; %0000 illegal
-    !byte 0 ; %0001 illegal
-    !byte 0 ; %0010 illegal
-    !byte 0 ; %0011 illegal
-    !byte 0 ; %0100 illegal
+    !byte 8 ; %0000 illegal
+    !byte 8 ; %0001 illegal
+    !byte 8 ; %0010 illegal
+    !byte 8 ; %0011 illegal
+    !byte 8 ; %0100 illegal
     !byte 4 ; %0101 RIGHT/DOWN
     !byte 2 ; %0110 RIGHT/UP
     !byte 3 ; %0111 RIGHT
-    !byte 0 ; %1000 illegal
+    !byte 8 ; %1000 illegal
     !byte 6 ; %1001 LEFT/DOWN
     !byte 0 ; %1010 LEFT/UP
     !byte 7 ; %1011 LEFT
-    !byte 0 ; %1100 illegal
+    !byte 8 ; %1100 illegal
     !byte 5 ; %1101 DOWN
     !byte 1 ; %1110 UP
-    !byte 0 ; %1111 illegal
-
-            !fill 3,$EE ; remaining
-
-;############################################################################
-*=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
-            !fill 11,0
-*=$01F8     ; Override return value on stack with own start address
-            !word INIT-1
-
-;############################################################################
-*=$01FA     ; DATA (01FA-0276 = 125 bytes)
+    !byte 8 ; %1111 illegal
 
 ;----------------------------------------------------------------------------
 ; KEYBOARD / JOYSTICK INPUT
 ;----------------------------------------------------------------------------
+
+DebouncedReadJoystick:
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
+            rts
 
 DebounceJoystick:
 -           jsr ReadJoystick
@@ -254,7 +266,7 @@ Random:
             sta ZP_RNG_HIGH ; x ^= x << 8 done
             rts
 
-            !fill 67,$EE ; remaining
+            !fill 25,$EE ; remaining
 
 ;############################################################################
 *=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
@@ -550,7 +562,7 @@ BackIntoSpace:
             ; end with the space ship
             lda ShipX
             ldy ShipY
-            ldx #G_SPACESHIP
+            ldx #G_SPACESHIPL
             jsr DrawGfxObject
 
             ldx #T_WHERETO
@@ -561,11 +573,27 @@ BackIntoSpace:
             jsr DebounceJoystick
 -           jsr ReadJoystick
             beq -
+            ; TODO: while no fire is pressed, draw the current movement vector and repeat
+            lda ShipY
+            ; sec
+            ; sbc #8
+            tay
+            lda ShipX
+            sec
+            sbc #8
+            jsr SetCoordinates
+            lda #43+128
+            ldy #0
+            sta (_CursorPos),y
+
+            lda Joystick
+            and #%00010000
+            bne -
 
             ; TODO move ship in the direction of the joystick
 --          lda ShipX
             ldy ShipY
-            ldx #G_SPACESHIP
+            ldx #G_SPACESHIPL
             jsr DrawGfxObject
 
 !if DEBUG=0 {
@@ -577,12 +605,10 @@ BackIntoSpace:
             dec ShipX   ; DEBUG
             ;inc ShipY   ; DEBUG
             lda ShipX
-            cmp #2
+            cmp #2+8-1
             bne --
 
-;             jsr DebounceJoystick
-; -           jsr ReadJoystick
-;             beq -
+            ; jsr DebouncedReadJoystick
 
             ;jmp BackIntoSpace
 
@@ -595,9 +621,7 @@ BackIntoSpace:
             ldy #24
             jsr DrawText
 
-            jsr DebounceJoystick
--           jsr ReadJoystick
-            beq -
+    	    jsr DebouncedReadJoystick
 
             lda #COL_BORDER
             sta $D020
@@ -629,9 +653,7 @@ BackIntoSpace:
             sta AwayTeam+TM_MEMBERS_X+3
             sta AwayTeam+TM_MEMBERS_X+4
 
-;             jsr DebounceJoystick
-; -           jsr ReadJoystick
-;             beq -
+;             jsr DebouncedReadJoystick
 
             ; transporting all members of the away team at the same time
             lda #0
@@ -675,9 +697,7 @@ loop:
             cpx #LEN_TM_MEMBERS
             bne -
 
-            jsr DebounceJoystick
--           jsr ReadJoystick
-            beq -
+            jsr DebouncedReadJoystick
 
             ;jmp BackIntoSpace
 
@@ -806,6 +826,10 @@ DrawSectorMarks:
             sta $0400+24*40,x
             dey
             bpl -
+            rts
+
+; draw health bar X at cursor $E9=/| $CE=/ $69=|/ $4E=/ (shield)
+DrawHealth:
             rts
 
 
