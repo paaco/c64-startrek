@@ -53,6 +53,10 @@ FILT_HI = $16
 FILT_VOICES = $17
 FILT_VOL = $18
 OSC3 = $1B
+; instructions
+INSTR_BIT=$24
+INSTR_INC=$E6
+INSTR_DEC=$C6
 ; colors
 COL_BORDER=GREEN ; only used on surface
 COL_SCREEN=BLACK ; also border in space
@@ -83,6 +87,9 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr EnemyTeam = $20
 !addr ShipX = $2C       ; screen pos X = sector left + random
 !addr ShipY = $2D       ; screen pos Y = sector top + random
+!addr NewShipX = $2E
+!addr NewShipY = $2F
+!addr ShipGfx = $30     ; graphic to draw (L or R)
 
 ;############################################################################
 *=$0120     ; DATA (0120-01ED = 205 bytes)
@@ -517,28 +524,15 @@ NotesDuration:
 
 Start:
             ; init game
-            lda #18
+            lda #2
             sta ShipX
             ldy #5
             sty ShipY
+            lda #G_SPACESHIPR
+            sta ShipGfx
 
 BackIntoSpace:
-            ; cls
-            ldx #0
--           lda #COL_TEXT
-            sta $D800,x
-            sta $D900,x
-            sta $DA00,x
-            sta $DB00,x
-            lda #CHR_SPACE
-            sta $0400,x
-            sta $0500,x
-            sta $0600,x
-            sta $06E8,x
-            inx
-            bne -
-
-            ; draw space screen
+            jsr Cls
             lda #COL_SCREEN
             sta $D020                   ; in space everything looks the same
             jsr DrawSectorMarks
@@ -562,7 +556,7 @@ BackIntoSpace:
             ; end with the space ship
             lda ShipX
             ldy ShipY
-            ldx #G_SPACESHIPL
+            ldx ShipGfx
             jsr DrawGfxObject
 
             ldx #T_WHERETO
@@ -571,46 +565,115 @@ BackIntoSpace:
             jsr DrawText
 
             jsr DebounceJoystick
--           jsr ReadJoystick
-            beq -
-            ; TODO: while no fire is pressed, draw the current movement vector and repeat
+.LoopUntilEngage:
+            jsr ReadJoystick
+            beq .LoopUntilEngage
+            sta Tmp1                    ; Joystick (111FRLDU)
+
             lda ShipY
-            ; sec
-            ; sbc #8
-            tay
-            lda ShipX
+            sta NewShipY
+            ldy #INSTR_BIT
+             ; UP
+            lda ShipY
+            lsr Tmp1                    ; C=UP (1=NO,0=YES)
+            bcs +
             sec
             sbc #8
-            jsr SetCoordinates
+            bmi +                       ; check move is possible
+            sta NewShipY
+            ldy #INSTR_DEC
++           ; DOWN
+            lda ShipY
+            lsr Tmp1                    ; C=DOWN (1=NO,0=YES)
+            bcs +
+            clc
+            adc #8
+            cmp #24
+            bpl +                       ; check move is possible
+            sta NewShipY
+            ldy #INSTR_INC
+
++           lda ShipX
+            sta NewShipX
+            ldx #INSTR_BIT
+            ; LEFT
+            lda ShipX
+            lsr Tmp1                    ; C=LEFT (1=NO,0=YES)
+            bcs +
+            sec
+            sbc #8
+            bmi +                       ; check move is possible
+            sta NewShipX
+            ldx #INSTR_DEC
++           ; RIGHT
+            lda ShipX
+            lsr Tmp1                    ; C=RIGHT (1=NO,0=YES)
+            bcs +
+            clc
+            adc #8
+            cmp #40
+            bpl +                       ; check move is possible
+            sta NewShipX
+            ldx #INSTR_INC
++
+            stx .fixupDX
+            sty .fixupDY
+
+            ; draw pointer to sector to navigate
+            ; TODO: undraw previous pointer somehow -- well, _CursorPos might still exist
+            ; TODO: don't redraw the screen when just FIRE and no direction
+            ldy NewShipY
+            lda NewShipX
+            cpy ShipY                   ; don't draw when no movement
+            bne +
+            cmp ShipX
+            beq ++
++           jsr SetCoordinates
             lda #43+128
             ldy #0
             sta (_CursorPos),y
 
-            lda Joystick
-            and #%00010000
-            bne -
+++          lsr Tmp1                    ; C=FIRE (1=NO,0=YES)
+            bcs .LoopUntilEngage
 
-            ; TODO move ship in the direction of the joystick
---          lda ShipX
+            ldx #39
+            lda #CHR_SPACE
+-           sta $0400+24*40,x
+            dex
+            bpl -
+            jsr DrawSectorMarks
+
+            ; Move the ship
+
+            ; set ship gfx in the right direction
+            lda NewShipX
+            cmp ShipX
+            beq .MoveShip               ; NewShipX == ShipX ? do nothing
+            lda #G_SPACESHIPL
+            bcc +                       ; NewShipX < ShipX => L
+            lda #G_SPACESHIPR           ; otherwise        => R
++           sta ShipGfx
+
+.MoveShip:
+.fixupDX:   inc ShipX   ; SELF-MODIFIED BIT/INC/DEC
+.fixupDY:   inc ShipY   ; SELF-MODIFIED BIT/INC/DEC
+            lda ShipX
             ldy ShipY
-            ldx #G_SPACESHIPL
+            ldx ShipGfx
             jsr DrawGfxObject
-
 !if DEBUG=0 {
 -           lda #$F0
             cmp $D012
             bne -
 }
-            ; DEBUG simulate movement
-            dec ShipX   ; DEBUG
-            ;inc ShipY   ; DEBUG
             lda ShipX
-            cmp #2+8-1
-            bne --
+            cmp NewShipX
+            bne .MoveShip
+            lda ShipY
+            cmp NewShipY
+            bne .MoveShip
 
-            ; jsr DebouncedReadJoystick
-
-            ;jmp BackIntoSpace
+            jmp BackIntoSpace
 
             ldx #T_JLUC
             lda #0
@@ -812,6 +875,24 @@ DrawPlanetSurface:
 ;----------------------------------------------------------------------------
 ; MAP
 ;----------------------------------------------------------------------------
+
+; clear the entire screen (clobbers A,X)
+Cls:
+            ; cls
+            ldx #0
+-           lda #COL_TEXT
+            sta $D800,x
+            sta $D900,x
+            sta $DA00,x
+            sta $DB00,x
+            lda #CHR_SPACE
+            sta $0400,x
+            sta $0500,x
+            sta $0600,x
+            sta $06E8,x
+            inx
+            bne -
+            rts
 
 ; The map is drawn in layers back-to-front, ship(s) last (in front)
 
