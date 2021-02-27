@@ -152,12 +152,35 @@ GfxData:
     !byte 32,32,32 ; some space to be able to enter the temple
     !byte 32,32,32
 
+; objects in space
+ObjectListData:
+            ;      X, Y, Gfx
+            !byte  1, 0, G_DS9
+            !byte  2,18, G_STATION
+            !byte 36, 1, G_STATION
+            !byte 24, 2, G_PLANET
+            !byte 36,17, G_PLANET
+            !byte 19,18, G_PLANET
+;            !byte 33, 2, G_ENEMYSHIP
+SIZEOF_OBJECTLIST = *-ObjectListData
+
 SectorOffsetData:
     !byte 0,8,16,24,32,39
 
 ; 25 screen line offsets packed in a single byte
 PackedLineOffsets:
     !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
+
+            !fill 23,$EE ; remaining
+
+;############################################################################
+*=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
+            !fill 11,0
+*=$01F8     ; Override return value on stack with own start address
+            !word INIT-1
+
+;############################################################################
+*=$01FA     ; DATA (01FA-0276 = 125 bytes)
 
 PlanetSurfaceData:
         ; % (/256)  char    otherwise    next switch
@@ -170,17 +193,6 @@ PlanetSurfaceData:
 TransporterBeamChars:
     !byte 119,69,68,91,219
 SIZEOF_TRANSPORTERBEAM=*-TransporterBeamChars
-
-            !fill 19,$EE ; remaining
-
-;############################################################################
-*=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
-            !fill 11,0
-*=$01F8     ; Override return value on stack with own start address
-            !word INIT-1
-
-;############################################################################
-*=$01FA     ; DATA (01FA-0276 = 125 bytes)
 
 ; Screen offsets for 8 rotations, clock wise:
 ; 0 1 2
@@ -273,8 +285,6 @@ Random:
             sta ZP_RNG_HIGH ; x ^= x << 8 done
             rts
 
-            !fill 25,$EE ; remaining
-
 ;############################################################################
 *=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
             !fill 5,0
@@ -309,13 +319,13 @@ Random:
 TextData:
     !byte CHR_SPACE                     ; X should stay 0 to erase text
     T_WHERETO=*-TextData
-    !scr "wesley: where to now",'?'+128
+    !scr "chekov: where to now",'?'+128
     T_LETSGO=*-TextData
     !scr ": an m-class planet! lets beam down",'!'+128
     T_RAIDERS=*-TextData
-    !scr "spock: sensors detect raiders",'!'+128
+    !scr "worf: sensors detect raiders",'!'+128
     T_STATION=*-TextData
-    !scr "restocked at the statio",'n'+128
+    !scr "repaired at the statio",'n'+128
     T_KIRK=*-TextData
     !scr "kir",'k'+128
     T_JLUC=*-TextData
@@ -536,38 +546,31 @@ BackIntoSpace:
             lda #COL_SCREEN
             sta $D020                   ; in space everything looks the same
             jsr DrawSectorMarks
-            ; draw loop over all objects
-            lda #1;<($0400+0*40+1)
-            ldy #0;>($0400+0*40+1)
-            ldx #G_DS9
-            jsr DrawGfxObject
-            lda #20
-            ldy #4
-            ldx #G_RAIDER
-            jsr DrawGfxObject
-            lda #30
-            ldy #9
-            ldx #G_STATION
-            jsr DrawGfxObject
-            lda #19
-            ldy #19
-            ldx #G_PLANET
-            jsr DrawGfxObject
-            ; end with the space ship
+            jsr DrawSpaceObjects
             lda ShipX
             ldy ShipY
             ldx ShipGfx
-            jsr DrawGfxObject
+            ; fixup so that the ship ends 1 space off DS709
+            cmp #2
+            bne +
+            cpy #5
+            bne +
+            iny
++           jsr DrawGfxObject
 
             ldx #T_WHERETO
-            lda #0
-            ldy #24
-            jsr DrawText
+            jsr DrawStatusText
+            dec _CursorPos              ; quick HACK to avoid undrawing text
 
             jsr DebounceJoystick
 .LoopUntilEngage:
             jsr ReadJoystick
+            bne +
+            jsr EraseAtCursor           ; undraw navigation pointer
+            beq .LoopUntilEngage        ; always
++           cmp #%11101111
             beq .LoopUntilEngage
+
             sta Tmp1                    ; Joystick (111FRLDU)
 
             lda ShipY
@@ -620,8 +623,7 @@ BackIntoSpace:
             sty .fixupDY
 
             ; draw pointer to sector to navigate
-            ; TODO: undraw previous pointer somehow -- well, _CursorPos might still exist
-            ; TODO: don't redraw the screen when just FIRE and no direction
+            jsr EraseAtCursor           ; undraw previous pointer
             ldy NewShipY
             lda NewShipX
             cpy ShipY                   ; don't draw when no movement
@@ -636,7 +638,8 @@ BackIntoSpace:
 ++          lsr Tmp1                    ; C=FIRE (1=NO,0=YES)
             bcs .LoopUntilEngage
 
-            ldx #39
+            ; erase line of text
++           ldx #39
             lda #CHR_SPACE
 -           sta $0400+24*40,x
             dex
@@ -676,13 +679,10 @@ BackIntoSpace:
             jmp BackIntoSpace
 
             ldx #T_JLUC
-            lda #0
-            ldy #24
-            jsr DrawText
+            jsr DrawStatusText
             ldx #T_LETSGO
             lda #4
-            ldy #24
-            jsr DrawText
+            jsr DrawMoreStatusText
 
     	    jsr DebouncedReadJoystick
 
@@ -894,8 +894,6 @@ Cls:
             bne -
             rts
 
-; The map is drawn in layers back-to-front, ship(s) last (in front)
-
 ; plot sector marks every 8x8 corner
 DrawSectorMarks:
             lda #CHR_SECTOR
@@ -909,6 +907,19 @@ DrawSectorMarks:
             bpl -
             rts
 
+; draw objects in space
+DrawSpaceObjects:
+            ldx #0
+-           stx Tmp1
+            jsr DrawGfxObjectFromList
+            lda Tmp1
+            clc
+            adc #3
+            tax
+            cpx #SIZEOF_OBJECTLIST
+            bne -
+            rts
+
 ; draw health bar X at cursor $E9=/| $CE=/ $69=|/ $4E=/ (shield)
 DrawHealth:
             rts
@@ -918,11 +929,15 @@ DrawHealth:
 ; GFX OBJECTS
 ;--------------------------------------------------------------
 
-; erase object X at A/Y
-EraseGfxObject:
-; TODO: alter routine below to erase: lda GfxData ($AD) instead of lda GfxData,x ($BD)
-
-; draw object X at A/Y
+; draw object X from ObjectListData (clobbers A,X,Y)
+DrawGfxObjectFromList:
+            lda ObjectListData,x
+            pha
+            ldy ObjectListData+1,x
+            lda ObjectListData+2,x
+            tax
+            pla
+; draw object X at A/Y (clobbers A,X,Y)
 DrawGfxObject:
             jsr SetCoordinates
             lda GfxObjectsData+GO_WIDTH,x
@@ -933,7 +948,7 @@ DrawGfxObject:
             tax
 ; TODO put this drawing part of routine in ZP (ObjWidth and ObjHeight and maybe Cursor will be inside)
 --          ldy #0
--           lda GfxData,x               ; SELF-MODIFIED $BD=lda,x / $AD=lda
+-           lda GfxData,x               ; TODO SELF-MODIFIED $BD=lda,x / $AD=lda to erase
             inx
             sta (_CursorPos),y
             iny
@@ -973,9 +988,12 @@ ErasePersonAt:
             jsr SetCoordinates
 ErasePerson:
             lda #CHR_SPACE
-+           ldy #0
++           ldy #40
             sta (_CursorPos),y
-            ldy #40
+; erase a character at cursor (clobbers A,Y) sets Z=1
+EraseAtCursor:
+            lda #CHR_SPACE
+            ldy #0
             sta (_CursorPos),y
             rts
 
@@ -1018,6 +1036,12 @@ AddAYToCursor:
 ; TEXT
 ;--------------------------------------------------------------
 
+; Puts text in X at coordinates 0,24 (slowly) (clobbers A,X,Y)
+DrawStatusText:
+            lda #0
+; Puts text in X at coordinates A,24 (slowly) (clobbers A,X,Y)
+DrawMoreStatusText:
+            ldy #24
 ; Puts text in X at coordinates A/Y (slowly) (clobbers A,X,Y)
 DrawText:
             jsr SetCoordinates
