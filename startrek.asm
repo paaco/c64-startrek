@@ -319,7 +319,7 @@ Random:
 TextData:
     !byte CHR_SPACE                     ; X should stay 0 to erase text
     T_WHERETO=*-TextData
-    !scr "chekov: where to now",'?'+128
+    !scr ": where to now",'?'+128
     T_LETSGO=*-TextData
     !scr ": an m-class planet! lets beam down",'!'+128
     T_RAIDERS=*-TextData
@@ -338,6 +338,12 @@ TextData:
     !scr "sar",'u'+128
     T_MIKL=*-TextData
     !scr "mik",'l'+128
+    T_CHEKOV=*-TextData
+    !scr "cheko",'v'+128
+    T_WESLEY=*-TextData
+    !scr "wesle",'y'+128
+    T_DETMER=*-TextData
+    !scr "detme",'r'+128
 
 ;############################################################################
 *=$0400     ; SCREEN (WILL BE WIPED)
@@ -373,11 +379,11 @@ INIT:
             bne -
             ; and restore text colors
             lda #COL_TEXT
--           sta $D800+10*40,y
+-           sta $D800+10*40+16,y
             iny
-            cpy #40
+            cpy #9
             bne -
--           sta $DA08+80,y
+-           sta $DA77,y
             sta $DB00,y
             iny
             bne -
@@ -395,6 +401,18 @@ INIT:
             sta SID+AD
             lda #$94
             sta SID+SR
+
+            ; create torpedo sprite
+            ldx #63
+            ldy #0
+-           sty $c0,x
+            dex
+            bne -
+            dey
+            sty $c0
+            sty $c1
+            sty $c3
+            sty $c4
 
             jmp PlayFanfare
 
@@ -416,13 +434,13 @@ INIT:
 ; 3 (72,0)
 !byte $ff,$ef,$9e,$7f,$e7,$9e,$78,$07,$9e,$78,$07,$9e,$78,$07,$9e,$78,$07,$9e,$78,$07,$9e,$79,$87,$be
 !byte $7f,$87,$f8,$7e,$07,$f8,$78,$07,$b8,$70,$07,$3c,$78,$07,$bc,$78,$07,$bc,$78,$07,$9e,$78,$07,$9e
-!byte $78,$07,$9e,$78,$07,$8f,$7f,$e7,$8f,$3f,$e7,$8f,$00,$00,$00,$00
+!byte $78,$07,$9e,$78,$07,$8f,$7f,$e7,$8f,$3f,$e7,$8f,$00,$00,$00;,$00
 
-; Logo
-*=$0400 + 10*40
-!scr "                last hope               "
+    !fill 33,$EE ; remaining
 
-; MAX 5*40 = 200 bytes of init data (will be wiped)
+; Logo text
+*=$0400 + 10*40 + 16
+!scr "last hope"
 
 PlayFanfare:
             ldx #0
@@ -466,6 +484,8 @@ PlayFanfare:
 ++          lda #0
             sta $D015                   ; sprites off
             sta SID+V1+WV               ; gate off
+            lda #3                      ; prepare torpedo sprite
+            sta $07f8
             jmp Start
 
 LOGO_SPRITE_Y=86
@@ -511,8 +531,6 @@ NotesHigh:
 NotesDuration:
     !byte 4*10,6*10,2*10,6*10,4*10,2*10,2*10,2*10,4*10,2*10,10*10
 
-    !fill 37,$EE ; remaining
-
 *=$0400 + 16*40
      ;1234567890123456789012345678901234567890
 !scr "captain's log, stardate 30321.1         "
@@ -542,24 +560,11 @@ Start:
             sta ShipGfx
 
 BackIntoSpace:
-            jsr Cls
-            lda #COL_SCREEN
-            sta $D020                   ; in space everything looks the same
-            jsr DrawSectorMarks
-            jsr DrawSpaceObjects
-            lda ShipX
-            ldy ShipY
-            ldx ShipGfx
-            ; fixup so that the ship ends 1 space off DS709
-            cmp #2
-            bne +
-            cpy #5
-            bne +
-            iny
-+           jsr DrawGfxObject
+            jsr DrawSpaceMap
 
-            ldx #T_WHERETO
-            jsr DrawStatusText
+            ldx #T_WESLEY
+            lda #T_WHERETO
+            jsr DrawSpeechLine
             dec _CursorPos              ; quick HACK to avoid undrawing text
 
             jsr DebounceJoystick
@@ -571,14 +576,12 @@ BackIntoSpace:
 +           cmp #%11101111
             beq .LoopUntilEngage
 
-            sta Tmp1                    ; Joystick (111FRLDU)
-
             lda ShipY
             sta NewShipY
             ldy #INSTR_BIT
              ; UP
             lda ShipY
-            lsr Tmp1                    ; C=UP (1=NO,0=YES)
+            lsr Joystick                ; C=UP (1=NO,0=YES)
             bcs +
             sec
             sbc #8
@@ -587,7 +590,7 @@ BackIntoSpace:
             ldy #INSTR_DEC
 +           ; DOWN
             lda ShipY
-            lsr Tmp1                    ; C=DOWN (1=NO,0=YES)
+            lsr Joystick                ; C=DOWN (1=NO,0=YES)
             bcs +
             clc
             adc #8
@@ -601,7 +604,7 @@ BackIntoSpace:
             ldx #INSTR_BIT
             ; LEFT
             lda ShipX
-            lsr Tmp1                    ; C=LEFT (1=NO,0=YES)
+            lsr Joystick                ; C=LEFT (1=NO,0=YES)
             bcs +
             sec
             sbc #8
@@ -610,7 +613,7 @@ BackIntoSpace:
             ldx #INSTR_DEC
 +           ; RIGHT
             lda ShipX
-            lsr Tmp1                    ; C=RIGHT (1=NO,0=YES)
+            lsr Joystick                ; C=RIGHT (1=NO,0=YES)
             bcs +
             clc
             adc #8
@@ -635,10 +638,12 @@ BackIntoSpace:
             ldy #0
             sta (_CursorPos),y
 
-++          lsr Tmp1                    ; C=FIRE (1=NO,0=YES)
+++          cpy #0                      ; Y==0 only when the navigation pointer is plotted
+            bne .LoopUntilEngage        ; so if not, loop back to avoid FIRE
+            lsr Joystick                ; C=FIRE (1=NO,0=YES)
             bcs .LoopUntilEngage
 
-            ; erase line of text
+            ; erase speech line
 +           ldx #39
             lda #CHR_SPACE
 -           sta $0400+24*40,x
@@ -676,13 +681,13 @@ BackIntoSpace:
             cmp NewShipY
             bne .MoveShip
 
-            jmp BackIntoSpace
+            jsr DrawSpaceMap            ; undraw ship movement
+
+            ; TODO now determine what to do
 
             ldx #T_JLUC
-            jsr DrawStatusText
-            ldx #T_LETSGO
-            lda #4
-            jsr DrawMoreStatusText
+            lda #T_LETSGO
+            jsr DrawSpeechLine
 
     	    jsr DebouncedReadJoystick
 
@@ -818,7 +823,7 @@ loop:
             cpx #LEN_TM_MEMBERS
             bne -
 
-            jmp loop
+            jmp BackIntoSpace
 
 ; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
 
@@ -876,9 +881,35 @@ DrawPlanetSurface:
 ; MAP
 ;----------------------------------------------------------------------------
 
+DrawSpaceMap:
+            jsr Cls
+            lda #COL_SCREEN
+            sta $D020                   ; in space everything looks the same
+            jsr DrawSectorMarks
+            ; draw objects
+            ldx #0
+-           stx Tmp1
+            jsr DrawGfxObjectFromList
+            lda Tmp1
+            clc
+            adc #3
+            tax
+            cpx #SIZEOF_OBJECTLIST
+            bne -
+            ; draw ship
+            lda ShipX
+            ldy ShipY
+            ldx ShipGfx
+            ; fixup so that the ship ends 1 space off DS709
+            cmp #2
+            bne +
+            cpy #5
+            bne +
+            iny
++           jmp DrawGfxObject
+
 ; clear the entire screen (clobbers A,X)
 Cls:
-            ; cls
             ldx #0
 -           lda #COL_TEXT
             sta $D800,x
@@ -905,19 +936,6 @@ DrawSectorMarks:
             sta $0400+24*40,x
             dey
             bpl -
-            rts
-
-; draw objects in space
-DrawSpaceObjects:
-            ldx #0
--           stx Tmp1
-            jsr DrawGfxObjectFromList
-            lda Tmp1
-            clc
-            adc #3
-            tax
-            cpx #SIZEOF_OBJECTLIST
-            bne -
             rts
 
 ; draw health bar X at cursor $E9=/| $CE=/ $69=|/ $4E=/ (shield)
@@ -1036,16 +1054,21 @@ AddAYToCursor:
 ; TEXT
 ;--------------------------------------------------------------
 
-; Puts text in X at coordinates 0,24 (slowly) (clobbers A,X,Y)
-DrawStatusText:
+; Puts text A by speaker X (>0) at coordinates 0,24 (slowly) (clobbers A,X,Y)
+DrawSpeechLine:
+            pha
             lda #0
-; Puts text in X at coordinates A,24 (slowly) (clobbers A,X,Y)
-DrawMoreStatusText:
             ldy #24
+            jsr DrawText
+            pla
+            tax
+            bne .continueText           ; always
+
 ; Puts text in X at coordinates A/Y (slowly) (clobbers A,X,Y)
 DrawText:
             jsr SetCoordinates
             ldy #0
+.continueText:
 --          lda TextData,x
             bpl +                       ; last?
             and #$7F                    ; yup
