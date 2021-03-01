@@ -77,6 +77,7 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr Tmp2 = $0B
 !addr Tmp3 = $0C
 !addr PrevJoystick = $0D
+!addr Navigator = $0E
 !addr AwayTeam = $10
     TM_CAPTAIN=0        ; head char of captain
     TM_CAPTAIN_NAME=1   ; text name of captain
@@ -90,6 +91,7 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr NewShipX = $2E
 !addr NewShipY = $2F
 !addr ShipGfx = $30     ; graphic to draw (L or R)
+!addr ShipHP = $31      ; ship health bar %SS000HHH 3-bits HP, 2-bits shield
 
 ;############################################################################
 *=$0120     ; DATA (0120-01ED = 205 bytes)
@@ -161,7 +163,6 @@ ObjectListData:
             !byte 24, 2, G_PLANET
             !byte 36,17, G_PLANET
             !byte 19,18, G_PLANET
-;            !byte 33, 2, G_ENEMYSHIP
 SIZEOF_OBJECTLIST = *-ObjectListData
 
 SectorOffsetData:
@@ -171,7 +172,16 @@ SectorOffsetData:
 PackedLineOffsets:
     !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
 
-            !fill 23,$EE ; remaining
+; 3*5 sector map stored as 2*8+5 bytes
+STATION=1
+S_DS709=2
+SPACE5=128 ; >3 means chance on raiders
+SPACE8=220
+PLANET=3
+SpaceMap:
+            !byte S_DS709, SPACE5, SPACE8, PLANET,STATION,0,0,0
+            !byte  SPACE5, SPACE8, SPACE8, SPACE8, SPACE5,0,0,0
+            !byte STATION, SPACE5, PLANET, SPACE8, PLANET
 
 ;############################################################################
 *=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
@@ -229,6 +239,8 @@ JoystickValueToOffset:
 ; KEYBOARD / JOYSTICK INPUT
 ;----------------------------------------------------------------------------
 
+DrawSpeechReadJoystick:
+            jsr DrawSpeechLine
 DebouncedReadJoystick:
             jsr DebounceJoystick
 -           jsr ReadJoystick
@@ -263,6 +275,23 @@ ReadJoystick:
             inx                 ; FF+1=0, so Z=1 means no input read
             rts
 
+            !fill 17,$EE ; remaining
+
+;############################################################################
+*=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
+            !fill 5,0
+
+            !fill 17,$EE ; remaining
+
+;############################################################################
+*=$028D     ; 028D-028E 2 bytes TRASHED DURING LOADING
+            !fill 2,0
+
+            !fill 18,$EE ; remaining
+
+;############################################################################
+*=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
+            !byte 0
 
 ;----------------------------------------------------------------------------
 ; PRNG
@@ -285,23 +314,95 @@ Random:
             sta ZP_RNG_HIGH ; x ^= x << 8 done
             rts
 
-;############################################################################
-*=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
-            !fill 5,0
 
-            !fill 17,$EE ; remaining
+;--------------------------------------------------------------
+; CURSOR
+;--------------------------------------------------------------
 
-;############################################################################
-*=$028D     ; 028D-028E 2 bytes TRASHED DURING LOADING
-            !fill 2,0
+; set cursor to coordinates A,Y where A=0..39 and Y=0..24 (clobbers A,Y)
+SetCoordinates:
+            sta _CursorPos
+            lda PackedLineOffsets,y
+            pha                         ; backup
+            and #%00000111              ; high bits ($04..$07)
+            sta _CursorPos+1
+            pla                         ; restore
+            and #%11111000              ; low bits
+            ; fall through
 
-            !fill 18,$EE ; remaining
+; adds A to cursor (clobbers A)
+AddAToCursor:
+            clc
+            adc _CursorPos
+            sta _CursorPos
+            bcc +
+            inc _CursorPos+1
++           rts
 
-;############################################################################
-*=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
-            !byte 0
+; adds 16-bit A/Y to cursor (clobbers A)
+AddAYToCursor:
+            jsr AddAToCursor
+            tya
+            clc
+            adc _CursorPos+1
+            sta _CursorPos+1
+            rts
 
-            !fill 114,$EE ; remaining
+
+;--------------------------------------------------------------
+; TEXT
+;--------------------------------------------------------------
+
+; Puts text A by speaker X (>0) at coordinates 0,24 (slowly) (clobbers A,X,Y)
+DrawSpeechLine:
+            pha
+            lda #8
+            ldy #24
+            jsr DrawText
+            pla
+            tax
+            bne .continueText           ; always
+
+; Puts text in X at coordinates A/Y (slowly) (clobbers A,X,Y)
+DrawText:
+            jsr SetCoordinates
+            ldy #0
+.continueText:
+--          lda TextData,x
+            bpl +                       ; last?
+            and #$7F                    ; yup
+            ldx #$FF                    ; stop loop
++           sta (_CursorPos),y
+            iny
+!if DEBUG=0 {
+-           cmp $D012
+            bne -
+}
+            inx
+            bne --
+            rts
+
+;--------------------------------------------------------------
+; DRAW PERSON
+;--------------------------------------------------------------
+
+; calls DrawSpecialPerson when X=0 and DrawPerson otherwise (clobbers A,Y)
+DrawPersonBasedOnX:
+            cpx #0
+            beq DrawSpecialPerson
+; draws a person at the cursor location (clobbers A,Y)
+DrawPerson:
+            lda #81                     ; ball head
+; draws a person with A as head at the cursor location (clobbers A,Y)
+DrawSpecialPerson:
+            ldy #0
+            sta (_CursorPos),y
+            lda #86                     ; arms and legs
+            ldy #40
+            sta (_CursorPos),y
+            rts
+
+            !fill 6,$EE ; remaining
 
 ;############################################################################
 *=$0314     ; IRQ, BRK and NMI Vectors to keep
@@ -319,13 +420,13 @@ Random:
 TextData:
     !byte CHR_SPACE                     ; X should stay 0 to erase text
     T_WHERETO=*-TextData
-    !scr ": where to now",'?'+128
+    !scr ":where to now",'?'+128
     T_LETSGO=*-TextData
-    !scr ": an m-class planet! lets beam down",'!'+128
+    !scr ":m-class planet! beam down",'!'+128
     T_RAIDERS=*-TextData
-    !scr "worf: sensors detect raiders",'!'+128
+    !scr ":sensors detect raiders",'!'+128
     T_STATION=*-TextData
-    !scr "repaired at the statio",'n'+128
+    !scr ":repaired at the statio",'n'+128
     T_KIRK=*-TextData
     !scr "kir",'k'+128
     T_JLUC=*-TextData
@@ -344,6 +445,12 @@ TextData:
     !scr "wesle",'y'+128
     T_DETMER=*-TextData
     !scr "detme",'r'+128
+    T_PARIS=*-TextData
+    !scr "pari",'s'+128
+    T_SCOTTY=*-TextData
+    !scr "scott",'y'+128
+    T_WORF=*-TextData
+    !scr "wor",'f'+128
 
 ;############################################################################
 *=$0400     ; SCREEN (WILL BE WIPED)
@@ -486,7 +593,15 @@ PlayFanfare:
             sta SID+V1+WV               ; gate off
             lda #3                      ; prepare torpedo sprite
             sta $07f8
+            lda ZP_RNG_LOW
+            and #$03
+            tax
+            lda NavigatorsData,x
+            sta Navigator
             jmp Start
+
+NavigatorsData:
+    !byte T_WESLEY,T_CHEKOV,T_DETMER,T_PARIS
 
 LOGO_SPRITE_Y=86
 VICData:
@@ -554,15 +669,16 @@ Start:
             ; init game
             lda #2
             sta ShipX
-            ldy #5
-            sty ShipY
+            lda #5
+            sta ShipY
+            sta ShipHP
             lda #G_SPACESHIPR
             sta ShipGfx
 
 BackIntoSpace:
             jsr DrawSpaceMap
-
-            ldx #T_WESLEY
+BackIntoSpace2:
+            ldx Navigator
             lda #T_WHERETO
             jsr DrawSpeechLine
             dec _CursorPos              ; quick HACK to avoid undrawing text
@@ -683,13 +799,51 @@ BackIntoSpace:
 
             jsr DrawSpaceMap            ; undraw ship movement
 
-            ; TODO now determine what to do
+            ; Now determine what to do
 
-            ldx #T_JLUC
+            lda ShipY
+            and #%11111000
+            sta Tmp1
+            lda ShipX
+            lsr
+            lsr
+            lsr
+            ora Tmp1
+            tax
+            lda SpaceMap,x
+            cmp #STATION
+            beq .station
+            cmp #S_DS709
+            bne +
+.ds709:     ; TODO DS709 is a special station?
+.station:   ldx #5
+            stx ShipHP
+            lda #0
+            jsr DrawHealthAt24
+            ldx #T_SCOTTY
+            lda #T_STATION
+            jsr DrawSpeechReadJoystick
+            jmp BackIntoSpace
+
++           cmp #PLANET
+            beq .planet
+.raiders:   ; check for raiders
+            sta Tmp1
+            jsr Random
+            cmp Tmp1
+            bcc +
+            jmp BackIntoSpace           ; no raiders
+            ; raiders detected
++           ldx #T_WORF
+            lda #T_RAIDERS
+            jsr DrawSpeechReadJoystick
+            ; TODO raider fight
+            dec ShipHP
+            jmp BackIntoSpace
+
+.planet:    ldx #T_JLUC
             lda #T_LETSGO
-            jsr DrawSpeechLine
-
-    	    jsr DebouncedReadJoystick
+            jsr DrawSpeechReadJoystick
 
             lda #COL_BORDER
             sta $D020
@@ -720,8 +874,6 @@ BackIntoSpace:
             lda #$FF
             sta AwayTeam+TM_MEMBERS_X+3
             sta AwayTeam+TM_MEMBERS_X+4
-
-;             jsr DebouncedReadJoystick
 
             ; transporting all members of the away team at the same time
             lda #0
@@ -896,6 +1048,12 @@ DrawSpaceMap:
             tax
             cpx #SIZEOF_OBJECTLIST
             bne -
+            ; draw ship health
+            lda ShipHP
+            and #%00000111              ; only HP, don't draw shield
+            tax
+            lda #0                      ; X-offset
+            jsr DrawHealthAt24
             ; draw ship
             lda ShipX
             ldy ShipY
@@ -938,13 +1096,61 @@ DrawSectorMarks:
             bpl -
             rts
 
-; draw health bar X at cursor $E9=/| $CE=/ $69=|/ $4E=/ (shield)
+
+;--------------------------------------------------------------
+; SHIP FIGHT
+;--------------------------------------------------------------
+
+DrawHealthAt24:
+            ldy #24
+            jsr SetCoordinates
+; draw health bar X (%SS000HHH) at cursor $E9=/| $CE=/ $69=|/ $4E=/ (shield)
+; (E9 CE* 69) 4E* 20* max 8 chars
 DrawHealth:
-            rts
+            txa
+            asl                         ; C=S S000HHH0
+            rol                         ; C=S 000HHH0S
+            rol                         ; C=0 00HHH0SS
+            and #%00000011
+            sta Tmp1                    ; Tmp1 = shield 0..3
+            ldy #0
+            txa
+            and #%00000111
+            tax                         ; X = health 0..7
+            beq .drawshield             ; only shield bar
+            ; draw health bar
+            lda #$E9                    ; /|
+            sta (_CursorPos),y
+            iny
+            dex
+-           dex
+            bmi +
+            lda #$CE                    ; /
+            sta (_CursorPos),y
+            iny
+            bne -
++           lda #$69                    ; |/
+            sta (_CursorPos),y
+            iny
+.drawshield:lda Tmp1
+            beq +                       ; done
+            lda #$4E                    ; /
+            sta (_CursorPos),y
+            iny
+            dec Tmp1
+            bne .drawshield
+
++           lda #CHR_SPACE
+.drawspc    cpy #8
+            bcs +
+            sta (_CursorPos),y
+            iny
+            bne .drawspc
++           rts
 
 
 ;--------------------------------------------------------------
-; GFX OBJECTS
+; DRAW GFX OBJECT
 ;--------------------------------------------------------------
 
 ; draw object X from ObjectListData (clobbers A,X,Y)
@@ -978,21 +1184,9 @@ DrawGfxObject:
             bne --
             rts
 
-; calls DrawSpecialPerson when X=0 and DrawPerson otherwise (clobbers A,Y)
-DrawPersonBasedOnX:
-            cpx #0
-            beq DrawSpecialPerson
-; draws a person at the cursor location (clobbers A,Y)
-DrawPerson:
-            lda #81                     ; ball head
-; draws a person with A as head at the cursor location (clobbers A,Y)
-DrawSpecialPerson:
-            ldy #0
-            sta (_CursorPos),y
-            lda #86                     ; arms and legs
-            ldy #40
-            sta (_CursorPos),y
-            rts
+;--------------------------------------------------------------
+; DRAW TRANSPORTER
+;--------------------------------------------------------------
 
 ; draws a transporter X and sets cursor to A/Y (clobbers A,Y)
 DrawTransporterAt:
@@ -1013,74 +1207,6 @@ EraseAtCursor:
             lda #CHR_SPACE
             ldy #0
             sta (_CursorPos),y
-            rts
-
-
-;--------------------------------------------------------------
-; CURSOR
-;--------------------------------------------------------------
-
-; set cursor to coordinates A,Y where A=0..39 and Y=0..24 (clobbers A,Y)
-SetCoordinates:
-            sta _CursorPos
-            lda PackedLineOffsets,y
-            pha                         ; backup
-            and #%00000111              ; high bits ($04..$07)
-            sta _CursorPos+1
-            pla                         ; restore
-            and #%11111000              ; low bits
-            ; fall through
-
-; adds A to cursor (clobbers A)
-AddAToCursor:
-            clc
-            adc _CursorPos
-            sta _CursorPos
-            bcc +
-            inc _CursorPos+1
-+           rts
-
-; adds 16-bit A/Y to cursor (clobbers A)
-AddAYToCursor:
-            jsr AddAToCursor
-            tya
-            clc
-            adc _CursorPos+1
-            sta _CursorPos+1
-            rts
-
-
-;--------------------------------------------------------------
-; TEXT
-;--------------------------------------------------------------
-
-; Puts text A by speaker X (>0) at coordinates 0,24 (slowly) (clobbers A,X,Y)
-DrawSpeechLine:
-            pha
-            lda #0
-            ldy #24
-            jsr DrawText
-            pla
-            tax
-            bne .continueText           ; always
-
-; Puts text in X at coordinates A/Y (slowly) (clobbers A,X,Y)
-DrawText:
-            jsr SetCoordinates
-            ldy #0
-.continueText:
---          lda TextData,x
-            bpl +                       ; last?
-            and #$7F                    ; yup
-            ldx #$FF                    ; stop loop
-+           sta (_CursorPos),y
-            iny
-!if DEBUG=0 {
--           cmp $D012
-            bne -
-}
-            inx
-            bne --
             rts
 
 
