@@ -65,6 +65,9 @@ COL_TEXT=GREEN
 CHR_SPACE=32+DEBUG*10 ; space or star
 CHR_SECTOR=91 ; standing cross
 TRANSPORTER_DELAY=8 ; #vblanks between animation frames
+SPRITE_TORPEDO=3
+SPRITE_EXPLOSION=12
+EXPLOSION_DELAY=25 ; #vblanks between animation frames
 
 ; ZP addresses
 !addr Joystick=$02
@@ -91,7 +94,13 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 !addr NewShipX = $2E
 !addr NewShipY = $2F
 !addr ShipGfx = $30     ; graphic to draw (L or R)
-!addr ShipHP = $31      ; ship health bar %SS000HHH 3-bits HP, 2-bits shield
+!addr ShipHP = $31      ; ship health 0..7
+!addr ShipShield = $32  ; ship shield 0..3
+!addr RaiderHP = $33    ; enemy ship health bar
+!addr RaiderShield = $34; enemy shield 0..3
+!addr FightY1 = $35     ; Y-pos of ship
+!addr FightY2 = $36     ; Y-pos of enemy ship
+; $C0-$FF is taken by torpedo sprite
 
 ;############################################################################
 *=$0120     ; DATA (0120-01ED = 205 bytes)
@@ -450,6 +459,8 @@ TextData:
     !scr ":sensors detect raiders",'!'+128
     T_STATION=*-TextData
     !scr ":repaired at the statio",'n'+128
+    T_FIGHT_MENU=*-TextData
+    !scr "evasive <   run   > torped",'o'+128
     T_KIRK=*-TextData
     !scr "kir",'k'+128
     T_JLUC=*-TextData
@@ -527,22 +538,16 @@ INIT:
             lda #$81
             sta SID+V3+WV               ; voice3 gate-on noise for random
 
-            lda #$6A
-            sta SID+AD
-            lda #$94
-            sta SID+SR
-
             ; create torpedo sprite
             ldx #63
             ldy #0
--           sty $c0,x
+-           sty $C0,x
             dex
             bne -
-            dey
-            sty $c0
-            sty $c1
-            sty $c3
-            sty $c4
+            lda #%11111110
+            sta $C0+11*3
+            lsr
+            sta $C0+12*3
 
             jmp PlayFanfare
 
@@ -575,12 +580,16 @@ INIT:
 PlayFanfare:
             ldx #0
 --          lda NotesLow,x
-            sta SID+FL
+            sta SID+V1+FL
             lda NotesHigh,x
-            sta SID+FH
+            sta SID+V1+FH
 
+            lda #$6A
+            sta SID+V1+AD
+            lda #$94
+            sta SID+V1+SR
             lda #$21
-            sta SID+WV
+            sta SID+V1+WV
 
             ldy NotesDuration,x
 -           lda #$80
@@ -600,7 +609,7 @@ PlayFanfare:
             cpy #4                      ; gate-off frames left
             bne +
             lda #$20
-            sta SID+WV
+            sta SID+V1+WV
 +           cpy #0
             bne -
             inx
@@ -613,9 +622,14 @@ PlayFanfare:
 
 ++          lda #0
             sta $D015                   ; sprites off
-            sta SID+V1+WV               ; gate off
+            sta $D017                   ; unexpand Y
+            sta $D01D                   ; unexpand X
+            sta SID+V1+WV               ; sound off
+            sta SID+V1+AD               ; prepare for explosion sound
+            lda #$B7
+            sta SID+V1+SR
             lda #3                      ; prepare torpedo sprite
-            sta $07f8
+            sta $07F8
             lda ZP_RNG_LOW
             and #$03
             tax
@@ -843,8 +857,7 @@ BackIntoSpace2:
 .ds709:     ; TODO DS709 is a special station?
 .station:   ldx #5
             stx ShipHP
-            lda #0
-            jsr DrawHealthAt24
+            jsr DrawHealthAt024
             ldx #T_SCOTTY
             lda #T_STATION
             jsr DrawSpeechReadJoystick
@@ -855,11 +868,11 @@ BackIntoSpace2:
             beq .planet
 
             ; else => random % raiders
-            sta Tmp1
+            sta Tmp1                    ; chance on raiders
             jsr Random
             cmp Tmp1
-            bcc .raiders
-            jmp BackIntoSpace           ; no raiders
+            bcc .raiders                ; yup
+            ; jmp BackIntoSpace           ; no raiders DEBUG
 
             ; raiders detected
 .raiders:   ldy ShipX
@@ -873,9 +886,7 @@ BackIntoSpace2:
             ldx #T_WORF
             lda #T_RAIDERS
             jsr DrawSpeechReadJoystick
-            ; TODO raider fight
-            dec ShipHP
-            jmp BackIntoSpace
+            jmp ShipFight
 
 .planet:    ldx #T_JLUC
             lda #T_LETSGO
@@ -1087,11 +1098,8 @@ DrawSpaceMap:
             cpx #SIZEOF_OBJECTLIST
             bne -
             ; draw ship health
-            lda ShipHP
-            and #%00000111              ; only HP, don't draw shield
-            tax
-            lda #0                      ; X-offset
-            jsr DrawHealthAt24
+            ldx ShipHP
+            jsr DrawHealthAt024
             ; draw ship
             lda ShipX
             ldy ShipY
@@ -1107,6 +1115,7 @@ DrawSpaceMap:
 ; clear the entire screen (clobbers A,X)
 Cls:
             ldx #0
+            stx $C6                     ; fixup torpedo sprite
 -           lda #COL_TEXT
             sta $D800,x
             sta $D900,x
@@ -1139,28 +1148,162 @@ DrawSectorMarks:
 ; SHIP FIGHT
 ;--------------------------------------------------------------
 
-DrawHealthAt24:
+; TODO After the initial setup what happens?
+
+; Raider actions:
+; EVASIVE: move to other line (different from other Y)
+; HIT: move to same line and fire
+; MISS: move to other line and fire (different from other Y)
+
+; Player actions:
+; EVASIVE: move to other line (different from other Y)
+; TORPEDO HIT: move to same line and fire
+; TORPEDO MISS: move to other line and fire (different from other Y)
+; FLEE: allow raider action and end battle
+
+; battle ends when either USS FIREBIRD or RAIDER has 0 HP
+
+ShipFight:
+            ; init
+            jsr Random
+            and #$07                    ; 0..7
+            clc
+            adc #6                      ; 6..13
+            lda #11
+            sta FightY1
+            eor #$04
+            sta FightY2
+            ; raider has 3+1 HP, ship gains 2 shields
+            ldx #$03
+            stx RaiderHP
+            dex
+            stx ShipShield
+            dex
+            stx RaiderShield
+            dex
+            stx Tmp1
+
+            jsr Cls
+
+            ldx ShipHP
+            ldy ShipShield
+            lda #8
+            jsr DrawHealthWithShieldAt22
+            ldx RaiderHP
+            ldy RaiderShield
+            lda #28
+            jsr DrawHealthWithShieldAt22
+
+            lda #8
+            ldy FightY1
+            ldx #G_SPACESHIPR
+            jsr DrawGfxObject
+            lda #28
+            ldy FightY2
+            ldx #G_ENEMYSHIP
+            jsr DrawGfxObject
+
+            lda #8
             ldy #24
-            jsr SetCoordinates
-; draw health bar X (%SS000HHH) at cursor $E9=/| $CE=/ $69=|/ $4E=/ (shield)
-; (E9 CE* 69) 4E* 20* max 8 chars
-DrawHealth:
-            txa
-            asl                         ; C=S S000HHH0
-            rol                         ; C=S 000HHH0S
-            rol                         ; C=0 00HHH0SS
-            and #%00000011
-            sta Tmp1                    ; Tmp1 = shield 0..3
+            ldx #T_FIGHT_MENU
+            jsr DrawTextAt
+
+            jsr DebouncedReadJoystick
+
+            lda FightY1
+            ldx #120
+            ldy #EXPLOSION_DELAY
+            jsr FireTorpedo
+
+            jsr DebouncedReadJoystick
+
+            lda FightY2
+            ldx #255
             ldy #0
+            jsr FireTorpedo
+
+            jsr DebouncedReadJoystick
+            dec ShipHP
+            jmp BackIntoSpace
+
+; fire a torpedo at height A starting at X (115 or 255) Y=0(miss)/EXPLOSION_DELAY(hit)
+FireTorpedo:
+            asl
+            asl
+            asl
+            adc #50                     ; offset Y torpedo
+            sta $D001
+            lda #SPRITE_TORPEDO
+            sta $07F8
+            lda #5                      ; +5
+            cpx #255
+            bne +
+            eor #$FF                    ; -5
++           sta Tmp1
+            txa                         ; X=start offset X
+            ldx #(255-115)/5-2
+--          sta $D000
             txa
-            and #%00000111
-            tax                         ; X = health 0..7
-            beq .drawshield             ; only shield bar
+            ora #$20
+            sta SID+V1+FH
+            lda #$21
+            sta SID+V1+WV               ; gate on
+            lda #1
+            sta $D015
+!if DEBUG=0 {
+-           lda #$E0
+            cmp $D012
+            bne -
+}
+            lda $D000
+            clc
+            adc Tmp1                    ; delta X (5 or FA=-5)
+            dex
+            bne --
+            lda #$20                    ; gate off
+            cpy #EXPLOSION_DELAY        ; Y is either EXPLOSION_DELAY(hit) or 0(miss)
+            bne +                       ; assume 0
+            lda #SPRITE_EXPLOSION
+            sta $07F8
+            jsr Random
+            sta SID+V1+FL
+            lda #$81
+            sta SID+V1+WV               ; gate on
+            ; visual delay
+-
+!if DEBUG=0 {
+            cpy $D012
+            bne -
+}
+            dey
+            bne -
+            lda #$80
++           sta SID+V1+WV               ; gate off
+            sty $D015                   ; sprite off
+            rts
+
+; draw health bar X (0..7) with shield Y at A/22 (clobbers A,X,Y,Tmp1)
+DrawHealthWithShieldAt22:
+            sty Tmp1
+            ldy #22
+            bne +                       ; always
+
+; draw health bar X (0..7) without shield at 0/24 (clobbers A,X,Y,Tmp1)
+DrawHealthAt024:
+            lda #0
+            sta Tmp1                    ; no shield
+            ldy #24
++           jsr SetCoordinates
+; draw health bar X (0..7) with shield Tmp1 (0..3) at cursor (clobbers A,X,Y,Tmp1)
+; (E9 CE* 69) 4E* 20* max 8 chars $E9=/| $CE=/ $69=|/ $4E=/ (shield)
+DrawHealth:
+            ldy #0
+            dex
+            bmi .drawshield             ; only shield bar
             ; draw health bar
             lda #$E9                    ; /|
             sta (_CursorPos),y
             iny
-            dex
 -           dex
             bmi +
             lda #$CE                    ; /
@@ -1178,7 +1321,7 @@ DrawHealth:
             dec Tmp1
             bne .drawshield
 +           lda #CHR_SPACE
-.drawspc    cpy #8
+.drawspc:   cpy #8
             bcs +
             sta (_CursorPos),y
             iny
