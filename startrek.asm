@@ -175,8 +175,8 @@ PackedLineOffsets:
 ; 3*5 sector map stored as 2*8+5 bytes
 STATION=1
 S_DS709=2
-SPACE5=128 ; >3 means chance on raiders
-SPACE8=220
+SPACE5=128 ; >3 means X/256 chance on raiders
+SPACE8=200
 PLANET=3
 SpaceMap:
             !byte S_DS709, SPACE5, SPACE8, PLANET,STATION,0,0,0
@@ -247,11 +247,6 @@ DebouncedReadJoystick:
             beq -
             rts
 
-DebounceJoystick:
--           jsr ReadJoystick
-            bne -
-            rts
-
 ; Reads Joystick A/B value (0 active) in A (111FRLDU) and Joystick variable (clobbers A,X,Y)
 ;  Z=1/X=0 means no (joystick) key pressed
 ReadJoystick:
@@ -275,13 +270,41 @@ ReadJoystick:
             inx                 ; FF+1=0, so Z=1 means no input read
             rts
 
-            !fill 17,$EE ; remaining
+;--------------------------------------------------------------
+; DRAW TRANSPORTER
+;--------------------------------------------------------------
+
+; draws a transporter X at the cursor location (clobbers A,Y)
+DrawTransporter:
+            lda TransporterBeamChars,x
+            bne .draw2high              ; always
+
+; erases person at cursor in A/Y (clobbers A,Y)
+ErasePersonAt:
+            jsr SetCoordinates
+            lda #CHR_SPACE
+.draw2high: ldy #40
+            sta (_CursorPos),y
+.draw1:     ldy #0
+            sta (_CursorPos),y
+            rts
+
+; erase a character at cursor (clobbers A,Y) sets Z=1
+EraseAtCursor:
+            lda #CHR_SPACE
+            bne .draw1
+
 
 ;############################################################################
 *=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
             !fill 5,0
 
-            !fill 17,$EE ; remaining
+DebounceJoystick:
+-           jsr ReadJoystick
+            bne -
+            rts
+
+            !fill 11,$EE ; remaining
 
 ;############################################################################
 *=$028D     ; 028D-028E 2 bytes TRASHED DURING LOADING
@@ -358,13 +381,13 @@ DrawSpeechLine:
             pha
             lda #8
             ldy #24
-            jsr DrawText
+            jsr DrawTextAt
             pla
             tax
             bne .continueText           ; always
 
 ; Puts text in X at coordinates A/Y (slowly) (clobbers A,X,Y)
-DrawText:
+DrawTextAt:
             jsr SetCoordinates
             ldy #0
 .continueText:
@@ -811,6 +834,8 @@ BackIntoSpace2:
             ora Tmp1
             tax
             lda SpaceMap,x
+
+            ; station?
             cmp #STATION
             beq .station
             cmp #S_DS709
@@ -825,16 +850,27 @@ BackIntoSpace2:
             jsr DrawSpeechReadJoystick
             jmp BackIntoSpace
 
+            ; planet?
 +           cmp #PLANET
             beq .planet
-.raiders:   ; check for raiders
+
+            ; else => random % raiders
             sta Tmp1
             jsr Random
             cmp Tmp1
-            bcc +
+            bcc .raiders
             jmp BackIntoSpace           ; no raiders
+
             ; raiders detected
-+           ldx #T_WORF
+.raiders:   ldy ShipX
+            iny
+            tya
+            ldy ShipY
+            dey
+            dey
+            ldx #G_RAIDER
+            jsr DrawGfxObject
+            ldx #T_WORF
             lda #T_RAIDERS
             jsr DrawSpeechReadJoystick
             ; TODO raider fight
@@ -885,7 +921,8 @@ BackIntoSpace2:
             bmi +                       ; dead?
             ldy AwayTeam+TM_MEMBERS_Y,x
             ldx Tmp2                    ; phase#
-            jsr DrawTransporterAt
+            jsr SetCoordinates
+            jsr DrawTransporter
 +           ldx Tmp1
             inx
             cpx #LEN_TM_MEMBERS
@@ -978,6 +1015,7 @@ loop:
             jmp BackIntoSpace
 
 ; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
+
 
 ;----------------------------------------------------------------------------
 ; PLANET
@@ -1139,7 +1177,6 @@ DrawHealth:
             iny
             dec Tmp1
             bne .drawshield
-
 +           lda #CHR_SPACE
 .drawspc    cpy #8
             bcs +
@@ -1182,31 +1219,6 @@ DrawGfxObject:
             jsr AddAToCursor
             dec ObjHeight
             bne --
-            rts
-
-;--------------------------------------------------------------
-; DRAW TRANSPORTER
-;--------------------------------------------------------------
-
-; draws a transporter X and sets cursor to A/Y (clobbers A,Y)
-DrawTransporterAt:
-            jsr SetCoordinates
-; draws a transporter X at the cursor location (clobbers A,Y)
-DrawTransporter:
-            lda TransporterBeamChars,x
-            bne +                       ; always
-; erases person at cursor in A/Y (clobbers A,Y)
-ErasePersonAt:
-            jsr SetCoordinates
-ErasePerson:
-            lda #CHR_SPACE
-+           ldy #40
-            sta (_CursorPos),y
-; erase a character at cursor (clobbers A,Y) sets Z=1
-EraseAtCursor:
-            lda #CHR_SPACE
-            ldy #0
-            sta (_CursorPos),y
             rts
 
 
