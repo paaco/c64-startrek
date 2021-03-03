@@ -57,6 +57,8 @@ OSC3 = $1B
 INSTR_BIT=$24
 INSTR_INC=$E6
 INSTR_DEC=$C6
+INSTR_INCX=$F6
+INSTR_DECX=$D6
 ; colors
 COL_BORDER=GREEN ; only used on surface
 COL_SCREEN=BLACK ; also border in space
@@ -69,12 +71,15 @@ SPRITE_TORPEDO=3
 SPRITE_EXPLOSION=12
 EXPLOSION_DELAY=25 ; #vblanks between animation frames
 NEEDED_RELICS=5 ; starts at 2 with 3 planets to raid
+MENU_FLEE=0
+MENU_EVASIVE=10
+MENU_TORPEDO=20
 
 ; ZP addresses
 !addr Joystick=$02
 !addr ZP_RNG_LOW = $03
 !addr ZP_RNG_HIGH = $04
-!addr ShipGfx = $05     ; graphic to draw (L or R)
+!addr MenuChoice = $05
 !addr _CursorPos = $06  ; ptr
 !addr ObjWidth = $08
 !addr ObjHeight = $09
@@ -98,11 +103,16 @@ NEEDED_RELICS=5 ; starts at 2 with 3 planets to raid
 !addr NewShipY = $2F
 !addr ShipData = $30
       SH_HP=0           ; hit points 0..7
-      SH_SHIELD=1       ; shield 0..3
-      SH_YOFF=2         ; Y-offset on screen 0..18
-      SH_HITCHANCE=3
+      SH_YOFF=1         ; Y-offset on screen 0..18
+      SH_HITCHANCE=2
+      SH_SHIELD=3       ; shield 0..3
       SIZEOF_SH=4
-!addr RaiderData=$34
+!addr ShipGfx = $34     ; graphic to draw (L or R)
+!addr RaiderData=$35
+    ; SH_HP
+    ; SH_YOFF
+    ; SH_HITCHANCE
+    ; SH_SHIELD
 ; $C0-$FF is taken by torpedo sprite
 
 ;############################################################################
@@ -322,7 +332,21 @@ DebounceJoystick:
 *=$028D     ; 028D-028E 2 bytes TRASHED DURING LOADING
             !fill 2,0
 
-            !fill 18,$EE ; remaining
+InitFight:
+            ldx #SIZEOF_INITFIGHTDATA-1
+-           lda InitFightData,x
+            sta ShipData+2,x
+            dex
+            bpl -
+            rts
+
+; Ship/Raider fight init
+InitFightData:
+    ; Ship: HITCHANCE,SHIELD,SHIPGFX Raider: HP,YOFF,HITCHANCE
+    !byte   0,        2,     G_SPACESHIPR,   3, 0,   0
+SIZEOF_INITFIGHTDATA=*-InitFightData
+
+            !fill 1,$EE ; remaining
 
 ;############################################################################
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
@@ -559,6 +583,8 @@ INIT:
             sta $C0+12*3
 
             jmp PlayFanfare
+
+    !fill 26,$EE ; remaining
 
 ; 4 sprites
 *=$0480
@@ -1179,6 +1205,7 @@ DrawSectorMarks:
 
 ShipFight:
             ; init
+            jsr InitFight
             jsr Random
             and #$07                    ; 0..7
             clc
@@ -1186,41 +1213,34 @@ ShipFight:
             sta ShipData+SH_YOFF
             eor #$04
             sta RaiderData+SH_YOFF
-            ; raider has 3+1 HP, ship gains 2 shields
-            ldx #$03
-            stx RaiderData+SH_HP
-            dex
-            stx ShipData+SH_SHIELD
-            dex
-            stx RaiderData+SH_SHIELD
-            stx Tmp1                    ; current menu choice
 
 NextRound:
-            jsr DrawFight
+            jsr ClsDrawFight
+            stx MenuChoice              ; invalidate
             jsr DebounceJoystick
 
             ; handle menu
-.loop:      jsr ReadJoystick            ; 111FRLDU
+.loopmenu:  jsr ReadJoystick            ; 111FRLDU
             lsr
             lsr
-            ldy #10                     ; EVASIVE
+            ldy #MENU_EVASIVE
             lsr                         ; LEFT?
             bcs +                       ; no, next
-            ldy #0                      ; RUN
+            ldy #MENU_FLEE
 +           lsr                         ; RIGHT?
             bcs +                       ; no, next
-            ldy #20                     ; TORPEDO
+            ldy #MENU_TORPEDO
 +
-            cpy Tmp1
+            cpy MenuChoice
             beq .checkfire              ; no need to redraw
-            sty Tmp1
+            sty MenuChoice
 
             ; redraw menu
             lda #8
             ldy #24
             ldx #T_FIGHT_MENU
             jsr DrawTextAt
-            ldy Tmp1
+            ldy MenuChoice
             ldx #7
 -           lda (_CursorPos),y
             ora #$80
@@ -1231,38 +1251,121 @@ NextRound:
 .checkfire:
             lda Joystick
             and #%00010000
-            bne .loop
+            bne .loopmenu
 
-            ;jsr DebouncedReadJoystick
+            ; player move
 
-            ldx #T_GAMEOVER
-            lda #15
-            jmp Restart
+            ;MENU_EVASIVE:
+            ldx #ShipData
+            lda RaiderData+SH_YOFF
+            jsr EvasiveManouver
+
+            ;MENU_FLEE:
+            ; TODO rotate ship, take enemy turn, end fight
+            ;MENU_TORPEDO:
+            ; TODO calc hit
+            ; TODO if hit, move to enemy, fire hit, evade enemy
+            ; TODO if miss, evade, fire miss
+
+            jsr Cls
+
+            ; enemy move
+
+            ; TODO calc hit
+            ; TODO if hit, move to player, fire hit, evade player
+            ; TODO if miss, evade, fire miss
+
+            ; hit
+            ldx #RaiderData
+            lda ShipData+SH_YOFF
+            jsr MoveShips
+            ; hit
+            jsr ClsDrawFight
+            lda RaiderData+SH_YOFF
+            ldx #255
+            ldy #EXPLOSION_DELAY
+            jsr FireTorpedo
+
+            ; miss
+            ldx #RaiderData
+            lda ShipData+SH_YOFF
+            jsr EvasiveManouver
+            ; miss
+            jsr ClsDrawFight
+            lda RaiderData+SH_YOFF
+            ldx #255
+            ldy #0
+            jsr FireTorpedo
+
+            ; jmp NextRound
+
+            ; ldx #T_GAMEOVER
+            ; lda #15
+            ; jmp Restart
 
             ; lda ShipData+SH_YOFF
             ; ldx #120
             ; ldy #EXPLOSION_DELAY
             ; jsr FireTorpedo
 
-            ; jsr DebouncedReadJoystick
-
             ; lda RaiderData+SH_YOFF
             ; ldx #255
             ; ldy #0
             ; jsr FireTorpedo
 
-            ; jsr DebouncedReadJoystick
-            ; dec ShipData+SH_HP
             jmp BackIntoSpace
 
-;----------------------------
-; draw the ship fight screen
-;----------------------------
-DrawFight:
+; evade ship X (ShipData/RaiderData) away from A (clobbers A,Y,Tmp1)
+EvasiveManouver:
+            sta Tmp1
+.again:     jsr Random
+            and #$1F
+            cmp #18
+            bcs .again                  ; >= too large
+            cmp SH_YOFF,x
+            beq .again                  ; same as actual
+            tay                         ; result
+            sec
+            sbc Tmp1                    ; other YOFF
+            cmp #-2
+            bcs .again                  ; >= too close
+            cmp #3
+            bcc .again                  ; < too close
+            tya
+            ; fall through
+
+; move ship X to position A; output Z=1 (clobbers A,X,Y,Tmp2,NewShipY)
+MoveShips:
+            stx Tmp2                    ; ShipData/RaiderData
+            sta NewShipY
+            ; set up or down
+            ldy #INSTR_INCX
+            cmp SH_YOFF,x
+            beq ++                      ; panic
+            bpl +
+            ldy #INSTR_DECX
++           sty fixupDY2
+
+--          jsr DrawFight
+!if DEBUG=0 {
+-           lda #$F0
+            cmp $D012
+            bne -
+}
+            ldx Tmp2                    ; ShipData/RaiderData
+fixupDY2:   dec SH_YOFF,x
+            lda SH_YOFF,x
+            cmp NewShipY
+            bne --
+++          rts
+
+ClsDrawFight:
             jsr Cls
+; draw the ship fight screen (clobbers A,X,Y)
+DrawFight:
             lda #8
             ldy ShipData+SH_YOFF
-            ldx #G_SPACESHIPR
+            ldx ShipGfx
             jsr DrawGfxObject
             lda #28
             ldy RaiderData+SH_YOFF
@@ -1271,19 +1374,14 @@ DrawFight:
             lda #0
             ldy #22
             jsr SetCoordinates
+            ldy #28
+            ldx RaiderData+SH_HP
+            jsr DrawHealth
             ldy #8
             ldx ShipData+SH_HP
             jsr DrawHealth
             ldx ShipData+SH_SHIELD
-            jsr DrawShield
-            ldy #28
-            ldx RaiderData+SH_HP
-            jsr DrawHealth
-            ldx RaiderData+SH_SHIELD
-            ; fall through
-
-; draw shield bar X at cursor+Y (clobbers A,X,Y)
-DrawShield:
+            ; draw player shield bar X at cursor+Y
 -           dex
             bmi +                       ; done
             lda #$4E                    ; /
