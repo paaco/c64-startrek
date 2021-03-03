@@ -68,12 +68,14 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 SPRITE_TORPEDO=3
 SPRITE_EXPLOSION=12
 EXPLOSION_DELAY=25 ; #vblanks between animation frames
+NEEDED_RELICS=5 ; starts at 2 with 3 planets to raid
 
 ; ZP addresses
 !addr Joystick=$02
 !addr ZP_RNG_LOW = $03
 !addr ZP_RNG_HIGH = $04
-!addr _CursorPos = $06 ; ptr
+!addr ShipGfx = $05     ; graphic to draw (L or R)
+!addr _CursorPos = $06  ; ptr
 !addr ObjWidth = $08
 !addr ObjHeight = $09
 !addr Tmp1 = $0A
@@ -81,6 +83,7 @@ EXPLOSION_DELAY=25 ; #vblanks between animation frames
 !addr Tmp3 = $0C
 !addr PrevJoystick = $0D
 !addr Navigator = $0E
+!addr Relics = $0F      ; win condition
 !addr AwayTeam = $10
     TM_CAPTAIN=0        ; head char of captain
     TM_CAPTAIN_NAME=1   ; text name of captain
@@ -93,13 +96,13 @@ EXPLOSION_DELAY=25 ; #vblanks between animation frames
 !addr ShipY = $2D       ; screen pos Y = sector top + random
 !addr NewShipX = $2E
 !addr NewShipY = $2F
-!addr ShipGfx = $30     ; graphic to draw (L or R)
-!addr ShipHP = $31      ; ship health 0..7
-!addr ShipShield = $32  ; ship shield 0..3
-!addr RaiderHP = $33    ; enemy ship health bar
-!addr RaiderShield = $34; enemy shield 0..3
-!addr FightY1 = $35     ; Y-pos of ship
-!addr FightY2 = $36     ; Y-pos of enemy ship
+!addr ShipData = $30
+      SH_HP=0           ; hit points 0..7
+      SH_SHIELD=1       ; shield 0..3
+      SH_YOFF=2         ; Y-offset on screen 0..18
+      SH_HITCHANCE=3
+      SIZEOF_SH=4
+!addr RaiderData=$34
 ; $C0-$FF is taken by torpedo sprite
 
 ;############################################################################
@@ -256,7 +259,7 @@ DebouncedReadJoystick:
             beq -
             rts
 
-; Reads Joystick A/B value (0 active) in A (111FRLDU) and Joystick variable (clobbers A,X,Y)
+; Reads Joystick A/B value (0 active) in A (111FRLDU) and Joystick variable (clobbers A,X)
 ;  Z=1/X=0 means no (joystick) key pressed
 ReadJoystick:
             ; disconnect keyboard
@@ -452,15 +455,21 @@ DrawSpecialPerson:
 TextData:
     !byte CHR_SPACE                     ; X should stay 0 to erase text
     T_WHERETO=*-TextData
-    !scr ":where to now",'?'+128
+    !scr ":where",'?'+128
     T_LETSGO=*-TextData
     !scr ":m-class planet! beam down",'!'+128
     T_RAIDERS=*-TextData
-    !scr ":sensors detect raiders",'!'+128
+    !scr ":raiders detected",'!'+128
     T_STATION=*-TextData
-    !scr ":repaired at the statio",'n'+128
+    !scr ":fully repaired",'n'+128
     T_FIGHT_MENU=*-TextData
-    !scr "evasive <   run   > torped",'o'+128
+    !scr "flee    < evasive > torped",'o'+128
+    T_YOUWIN=*-TextData
+    !scr "relics at ds709. earth saved",'!'+128
+    T_GAMEOVER=*-TextData
+    !scr "game over",'!'+128
+    T_RELICFOUND=*-TextData
+    !scr "q:here's a relic",'!'+128
     T_KIRK=*-TextData
     !scr "kir",'k'+128
     T_JLUC=*-TextData
@@ -626,7 +635,7 @@ PlayFanfare:
             sta $D01D                   ; unexpand X
             sta SID+V1+WV               ; sound off
             sta SID+V1+AD               ; prepare for explosion sound
-            lda #$B7
+            lda #$B8
             sta SID+V1+SR
             lda #3                      ; prepare torpedo sprite
             sta $07F8
@@ -702,13 +711,19 @@ NotesDuration:
 ;############################################################################
 *=$0800     ; CODE
 
+; restart with text X at X-offset A
+Restart:
+            ldy #12
+            jsr DrawTextAt
+            jsr DebouncedReadJoystick
 Start:
             ; init game
             lda #2
             sta ShipX
+            sta Relics                  ; init at 2 to save code; need 3 so check for 5
             lda #5
             sta ShipY
-            sta ShipHP
+            sta ShipData+SH_HP
             lda #G_SPACESHIPR
             sta ShipGfx
 
@@ -854,9 +869,15 @@ BackIntoSpace2:
             beq .station
             cmp #S_DS709
             bne +
-.ds709:     ; TODO DS709 is a special station?
+.ds709:     lda Relics
+            cmp #NEEDED_RELICS
+            bne .station
+            ; win condition
+            ldx #T_YOUWIN
+            lda #5
+            jmp Restart
 .station:   ldx #5
-            stx ShipHP
+            stx ShipData+SH_HP
             jsr DrawHealthAt024
             ldx #T_SCOTTY
             lda #T_STATION
@@ -872,8 +893,7 @@ BackIntoSpace2:
             jsr Random
             cmp Tmp1
             bcc .raiders                ; yup
-            ; jmp BackIntoSpace           ; no raiders DEBUG
-
+            jmp BackIntoSpace           ; no raiders
             ; raiders detected
 .raiders:   ldy ShipX
             iny
@@ -1079,7 +1099,7 @@ DrawPlanetSurface:
 
 
 ;----------------------------------------------------------------------------
-; MAP
+; SPACE MAP
 ;----------------------------------------------------------------------------
 
 DrawSpaceMap:
@@ -1098,7 +1118,7 @@ DrawSpaceMap:
             cpx #SIZEOF_OBJECTLIST
             bne -
             ; draw ship health
-            ldx ShipHP
+            ldx ShipData+SH_HP
             jsr DrawHealthAt024
             ; draw ship
             lda ShipX
@@ -1112,25 +1132,25 @@ DrawSpaceMap:
             iny
 +           jmp DrawGfxObject
 
-; clear the entire screen (clobbers A,X)
+; clear the entire screen (clobbers A,Y)
 Cls:
-            ldx #0
-            stx $C6                     ; fixup torpedo sprite
+            ldy #0
+            sty $C6                     ; fixup torpedo sprite
 -           lda #COL_TEXT
-            sta $D800,x
-            sta $D900,x
-            sta $DA00,x
-            sta $DB00,x
+            sta $D800,y
+            sta $D900,y
+            sta $DA00,y
+            sta $DB00,y
             lda #CHR_SPACE
-            sta $0400,x
-            sta $0500,x
-            sta $0600,x
-            sta $06E8,x
-            inx
+            sta $0400,y
+            sta $0500,y
+            sta $0600,y
+            sta $06E8,y
+            iny
             bne -
             rts
 
-; plot sector marks every 8x8 corner
+; plot sector marks every 8x8 corner (clobbers A,X,Y)
 DrawSectorMarks:
             lda #CHR_SECTOR
             ldy #5
@@ -1148,20 +1168,14 @@ DrawSectorMarks:
 ; SHIP FIGHT
 ;--------------------------------------------------------------
 
-; TODO After the initial setup what happens?
+; TURN:
+; EVASIVE: move away                                     & lower hit-chance of enemy
+; TORPEDO:
+;  if HIT: move to enemy Y & fire hit  & move enemy away & raise own hit-chance
+; if MISS: move away       & fire miss                   & raise own hit-chance
+; FLEE:    turn around     & enemy move (player only)
 
-; Raider actions:
-; EVASIVE: move to other line (different from other Y)
-; HIT: move to same line and fire
-; MISS: move to other line and fire (different from other Y)
-
-; Player actions:
-; EVASIVE: move to other line (different from other Y)
-; TORPEDO HIT: move to same line and fire
-; TORPEDO MISS: move to other line and fire (different from other Y)
-; FLEE: allow raider action and end battle
-
-; battle ends when either USS FIREBIRD or RAIDER has 0 HP
+; battle ends when either USS FIREBIRD has 0 HP => GAME OVER or RAIDER has 0 HP => continue
 
 ShipFight:
             ; init
@@ -1169,62 +1183,114 @@ ShipFight:
             and #$07                    ; 0..7
             clc
             adc #6                      ; 6..13
-            lda #11
-            sta FightY1
+            sta ShipData+SH_YOFF
             eor #$04
-            sta FightY2
+            sta RaiderData+SH_YOFF
             ; raider has 3+1 HP, ship gains 2 shields
             ldx #$03
-            stx RaiderHP
+            stx RaiderData+SH_HP
             dex
-            stx ShipShield
+            stx ShipData+SH_SHIELD
             dex
-            stx RaiderShield
-            dex
-            stx Tmp1
+            stx RaiderData+SH_SHIELD
+            stx Tmp1                    ; current menu choice
 
-            jsr Cls
+NextRound:
+            jsr DrawFight
+            jsr DebounceJoystick
 
-            ldx ShipHP
-            ldy ShipShield
-            lda #8
-            jsr DrawHealthWithShieldAt22
-            ldx RaiderHP
-            ldy RaiderShield
-            lda #28
-            jsr DrawHealthWithShieldAt22
+            ; handle menu
+.loop:      jsr ReadJoystick            ; 111FRLDU
+            lsr
+            lsr
+            ldy #10                     ; EVASIVE
+            lsr                         ; LEFT?
+            bcs +                       ; no, next
+            ldy #0                      ; RUN
++           lsr                         ; RIGHT?
+            bcs +                       ; no, next
+            ldy #20                     ; TORPEDO
++
+            cpy Tmp1
+            beq .checkfire              ; no need to redraw
+            sty Tmp1
 
-            lda #8
-            ldy FightY1
-            ldx #G_SPACESHIPR
-            jsr DrawGfxObject
-            lda #28
-            ldy FightY2
-            ldx #G_ENEMYSHIP
-            jsr DrawGfxObject
-
+            ; redraw menu
             lda #8
             ldy #24
             ldx #T_FIGHT_MENU
             jsr DrawTextAt
+            ldy Tmp1
+            ldx #7
+-           lda (_CursorPos),y
+            ora #$80
+            sta (_CursorPos),y
+            iny
+            dex
+            bne -
+.checkfire:
+            lda Joystick
+            and #%00010000
+            bne .loop
 
-            jsr DebouncedReadJoystick
+            ;jsr DebouncedReadJoystick
 
-            lda FightY1
-            ldx #120
-            ldy #EXPLOSION_DELAY
-            jsr FireTorpedo
+            ldx #T_GAMEOVER
+            lda #15
+            jmp Restart
 
-            jsr DebouncedReadJoystick
+            ; lda ShipData+SH_YOFF
+            ; ldx #120
+            ; ldy #EXPLOSION_DELAY
+            ; jsr FireTorpedo
 
-            lda FightY2
-            ldx #255
-            ldy #0
-            jsr FireTorpedo
+            ; jsr DebouncedReadJoystick
 
-            jsr DebouncedReadJoystick
-            dec ShipHP
+            ; lda RaiderData+SH_YOFF
+            ; ldx #255
+            ; ldy #0
+            ; jsr FireTorpedo
+
+            ; jsr DebouncedReadJoystick
+            ; dec ShipData+SH_HP
             jmp BackIntoSpace
+
+;----------------------------
+; draw the ship fight screen
+;----------------------------
+DrawFight:
+            jsr Cls
+            lda #8
+            ldy ShipData+SH_YOFF
+            ldx #G_SPACESHIPR
+            jsr DrawGfxObject
+            lda #28
+            ldy RaiderData+SH_YOFF
+            ldx #G_ENEMYSHIP
+            jsr DrawGfxObject
+            lda #0
+            ldy #22
+            jsr SetCoordinates
+            ldy #8
+            ldx ShipData+SH_HP
+            jsr DrawHealth
+            ldx ShipData+SH_SHIELD
+            jsr DrawShield
+            ldy #28
+            ldx RaiderData+SH_HP
+            jsr DrawHealth
+            ldx RaiderData+SH_SHIELD
+            ; fall through
+
+; draw shield bar X at cursor+Y (clobbers A,X,Y)
+DrawShield:
+-           dex
+            bmi +                       ; done
+            lda #$4E                    ; /
+            sta (_CursorPos),y
+            iny
+            bne -
++           rts
 
 ; fire a torpedo at height A starting at X (115 or 255) Y=0(miss)/EXPLOSION_DELAY(hit)
 FireTorpedo:
@@ -1238,13 +1304,13 @@ FireTorpedo:
             lda #5                      ; +5
             cpx #255
             bne +
-            eor #$FF                    ; -5
+            lda #$FA                    ; -5
 +           sta Tmp1
             txa                         ; X=start offset X
             ldx #(255-115)/5-2
 --          sta $D000
             txa
-            ora #$20
+            adc #$10
             sta SID+V1+FH
             lda #$21
             sta SID+V1+WV               ; gate on
@@ -1282,25 +1348,17 @@ FireTorpedo:
             sty $D015                   ; sprite off
             rts
 
-; draw health bar X (0..7) with shield Y at A/22 (clobbers A,X,Y,Tmp1)
-DrawHealthWithShieldAt22:
-            sty Tmp1
-            ldy #22
-            bne +                       ; always
-
-; draw health bar X (0..7) without shield at 0/24 (clobbers A,X,Y,Tmp1)
+; draw health bar X (0..7) at 0/24 (clobbers A,X,Y)
 DrawHealthAt024:
             lda #0
-            sta Tmp1                    ; no shield
             ldy #24
 +           jsr SetCoordinates
-; draw health bar X (0..7) with shield Tmp1 (0..3) at cursor (clobbers A,X,Y,Tmp1)
-; (E9 CE* 69) 4E* 20* max 8 chars $E9=/| $CE=/ $69=|/ $4E=/ (shield)
-DrawHealth:
             ldy #0
+; draw health bar X at cursor+Y (clobbers A,X,Y)
+; (E9 CE* 69) with characters $E9=/| $CE=/ $69=|/ $4E=/ (shield)
+DrawHealth:
             dex
-            bmi .drawshield             ; only shield bar
-            ; draw health bar
+            bmi ++                      ; done
             lda #$E9                    ; /|
             sta (_CursorPos),y
             iny
@@ -1313,20 +1371,7 @@ DrawHealth:
 +           lda #$69                    ; |/
             sta (_CursorPos),y
             iny
-.drawshield:lda Tmp1
-            beq +                       ; done
-            lda #$4E                    ; /
-            sta (_CursorPos),y
-            iny
-            dec Tmp1
-            bne .drawshield
-+           lda #CHR_SPACE
-.drawspc:   cpy #8
-            bcs +
-            sta (_CursorPos),y
-            iny
-            bne .drawspc
-+           rts
+++          rts
 
 
 ;--------------------------------------------------------------
@@ -1350,9 +1395,8 @@ DrawGfxObject:
             sta ObjHeight
             lda GfxObjectsData+GO_OFFSET,x
             tax
-; TODO put this drawing part of routine in ZP (ObjWidth and ObjHeight and maybe Cursor will be inside)
 --          ldy #0
--           lda GfxData,x               ; TODO SELF-MODIFIED $BD=lda,x / $AD=lda to erase
+-           lda GfxData,x               ; $BD=lda,x / $AD=lda to erase
             inx
             sta (_CursorPos),y
             iny
