@@ -461,7 +461,7 @@ TextData:
     T_RAIDERS=*-TextData
     !scr ":raiders detected",'!'+128
     T_STATION=*-TextData
-    !scr ":fully repaired",'n'+128
+    !scr ":fully repaired",'!'+128
     T_FIGHT_MENU=*-TextData
     !scr "flee    < evasive > torped",'o'+128
     T_YOUWIN=*-TextData
@@ -469,7 +469,7 @@ TextData:
     T_GAMEOVER=*-TextData
     !scr "game over",'!'+128
     T_RELICFOUND=*-TextData
-    !scr "q:here's a relic",'!'+128
+    !scr "q:haha here's a relic",'!'+128
     T_KIRK=*-TextData
     !scr "kir",'k'+128
     T_JLUC=*-TextData
@@ -700,7 +700,7 @@ NotesDuration:
 !scr " they need *you* to lead the away teams "
 !scr " with elite captains to find 3 relics   "
 !scr " that can save planet earth.            "
-!scr " fight raiders. restock at stations.    "
+!scr " fight raiders. repair at stations.     "
 !scr "                                        "
 !scr "by alexander paalvast / twain pain games"
 
