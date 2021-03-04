@@ -343,7 +343,7 @@ InitFight:
 ; Ship/Raider fight init
 InitFightData:
     ; Ship: HITCHANCE,SHIELD,SHIPGFX Raider: HP,YOFF,HITCHANCE
-    !byte   0,        2,     G_SPACESHIPR,   3, 0,   0
+    !byte   1,        2,     G_SPACESHIPR,   3, 0,   0
 SIZEOF_INITFIGHTDATA=*-InitFightData
 
             !fill 1,$EE ; remaining
@@ -1194,15 +1194,6 @@ DrawSectorMarks:
 ; SHIP FIGHT
 ;--------------------------------------------------------------
 
-; TURN:
-; EVASIVE: move away                                     & lower hit-chance of enemy
-; TORPEDO:
-;  if HIT: move to enemy Y & fire hit  & move enemy away & raise own hit-chance
-; if MISS: move away       & fire miss                   & raise own hit-chance
-; FLEE:    turn around     & enemy move (player only)
-
-; battle ends when either USS FIREBIRD has 0 HP => GAME OVER or RAIDER has 0 HP => continue
-
 ShipFight:
             ; init
             jsr InitFight
@@ -1218,6 +1209,11 @@ NextRound:
             jsr ClsDrawFight
             stx MenuChoice              ; invalidate
             jsr DebounceJoystick
+
+            lda ShipGfx
+            cmp #G_SPACESHIPL           ; escaped?
+            bne .loopmenu
+.endfight:  jmp BackIntoSpace
 
             ; handle menu
 .loopmenu:  jsr ReadJoystick            ; 111FRLDU
@@ -1254,69 +1250,103 @@ NextRound:
             bne .loopmenu
 
             ; player move
+.playerturn:
+            ldy MenuChoice
+            cpy #MENU_FLEE
+            bne +
+            ; FLEE
+            lda #0                      ; drop shield
+            sta ShipData+SH_SHIELD
+            lda #G_SPACESHIPL           ; turn around
+            sta ShipGfx
+            bne ++                      ; always
 
-            ;MENU_EVASIVE:
++           cpy #MENU_EVASIVE
+            bne .playertorpedo
+            ; EVASIVE
+            ; lower hit chance of raider
+            lda #0
+            sta RaiderData+SH_HITCHANCE
+++          jsr PlayerEvasiveManouver
+            bmi .enemyturn              ; always
+
+            ; TORPEDO
+.playertorpedo:
+            ; TODO calc hit
+            jmp .playermisses ; DEBUG
+
+            ; hit: move to enemy, fire hit, evade enemy
             ldx #ShipData
             lda RaiderData+SH_YOFF
-            jsr EvasiveManouver
-
-            ;MENU_FLEE:
-            ; TODO rotate ship, take enemy turn, end fight
-            ;MENU_TORPEDO:
-            ; TODO calc hit
-            ; TODO if hit, move to enemy, fire hit, evade enemy
-            ; TODO if miss, evade, fire miss
-
-            jsr Cls
-
-            ; enemy move
-
-            ; TODO calc hit
-            ; TODO if hit, move to player, fire hit, evade player
-            ; TODO if miss, evade, fire miss
-
-            ; hit
-            ldx #RaiderData
-            lda ShipData+SH_YOFF
-            jsr MoveShips
-            ; hit
-            jsr ClsDrawFight
-            lda RaiderData+SH_YOFF
-            ldx #255
+            jsr MoveShipXtoA
             ldy #EXPLOSION_DELAY
-            jsr FireTorpedo
-
-            ; miss
+            jsr PlayerFireTorpedo
+            dec RaiderData+SH_HP
+            jsr ClsDrawFight
+            lda RaiderData+SH_HP        ; raider destroyed?
+            beq .endfight
+            jsr EnemyEvasiveManouver
+            bmi .playerlockon           ; always
+            ; miss: evade, fire miss
+.playermisses:
+            jsr PlayerEvasiveManouver
+            ldy #0
+            jsr PlayerFireTorpedo
+            ; increase hit chance
+.playerlockon:
+            lda ShipData+SH_HITCHANCE
+            cmp #3                      ; cap
+            bpl +
+            inc ShipData+SH_HITCHANCE
++
+            ; enemy move
+.enemyturn:
+            ; TORPEDO
+            ; TODO calc hit
+            ; hit: move to player, fire hit, evade player
             ldx #RaiderData
             lda ShipData+SH_YOFF
-            jsr EvasiveManouver
-            ; miss
-            jsr ClsDrawFight
-            lda RaiderData+SH_YOFF
-            ldx #255
+            jsr MoveShipXtoA
+            ldy #EXPLOSION_DELAY
+            jsr EnemyFireTorpedo
+            dec ShipData+SH_SHIELD
+            bpl +
+            inc ShipData+SH_SHIELD      ; keep shield at 0
+            dec ShipData+SH_HP
++           jsr ClsDrawFight
+            lda ShipData+SH_HP          ; ship destroyed?
+            bne +
+            ldx #T_GAMEOVER
+            lda #15
+            jmp Restart
++           jsr PlayerEvasiveManouver
+            bmi .enemylockon            ; always
+            ; miss: evade, fire miss
+.enemymisses:
+            jsr EnemyEvasiveManouver
             ldy #0
-            jsr FireTorpedo
+            jsr EnemyFireTorpedo
+            ; increase hit chance
+.enemylockon:
+            lda RaiderData+SH_HITCHANCE
+            cmp #3                      ; cap
+            bpl +
+            inc RaiderData+SH_HITCHANCE
++           jmp NextRound
 
-            ; jmp NextRound
+;---------------
+; ship movement
+;---------------
 
-            ; ldx #T_GAMEOVER
-            ; lda #15
-            ; jmp Restart
-
-            ; lda ShipData+SH_YOFF
-            ; ldx #120
-            ; ldy #EXPLOSION_DELAY
-            ; jsr FireTorpedo
-
-            ; lda RaiderData+SH_YOFF
-            ; ldx #255
-            ; ldy #0
-            ; jsr FireTorpedo
-
-            jmp BackIntoSpace
-
+PlayerEvasiveManouver:
+            lda RaiderData+SH_YOFF
+            ldx #ShipData
+            bne .EvasiveManouver        ; always
+EnemyEvasiveManouver:
+            lda ShipData+SH_YOFF
+            ldx #RaiderData
 ; evade ship X (ShipData/RaiderData) away from A (clobbers A,Y,Tmp1)
-EvasiveManouver:
+.EvasiveManouver:
             sta Tmp1
 .again:     jsr Random
             and #$1F
@@ -1335,7 +1365,7 @@ EvasiveManouver:
             ; fall through
 
 ; move ship X to position A; output Z=1 (clobbers A,X,Y,Tmp2,NewShipY)
-MoveShips:
+MoveShipXtoA:
             stx Tmp2                    ; ShipData/RaiderData
             sta NewShipY
             ; set up or down
@@ -1357,7 +1387,7 @@ fixupDY2:   dec SH_YOFF,x
             lda SH_YOFF,x
             cmp NewShipY
             bne --
-++          rts
+++          ; fall through
 
 ClsDrawFight:
             jsr Cls
@@ -1387,11 +1417,18 @@ DrawFight:
             lda #$4E                    ; /
             sta (_CursorPos),y
             iny
-            bne -
+            bne -                       ; always
 +           rts
 
+PlayerFireTorpedo:
+            lda ShipData+SH_YOFF
+            ldx #120
+            bne .FireTorpedo            ; always
+EnemyFireTorpedo:
+            lda RaiderData+SH_YOFF
+            ldx #255
 ; fire a torpedo at height A starting at X (115 or 255) Y=0(miss)/EXPLOSION_DELAY(hit)
-FireTorpedo:
+.FireTorpedo:
             asl
             asl
             asl
