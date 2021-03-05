@@ -70,7 +70,8 @@ TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 SPRITE_TORPEDO=3
 SPRITE_EXPLOSION=12
 EXPLOSION_DELAY=25 ; #vblanks between animation frames
-NEEDED_RELICS=5 ; starts at 2 with 3 planets to raid
+NEEDED_RELICS=3
+MAX_HP=5 ; maximum HP
 MENU_FLEE=0
 MENU_EVASIVE=10
 MENU_TORPEDO=20
@@ -461,7 +462,11 @@ DrawSpecialPerson:
             sta (_CursorPos),y
             rts
 
-            !fill 6,$EE ; remaining
+; hit chances: 25%, 50%, 75%, 90%
+HitChanceData:
+    !byte 64,128,192,230
+
+            !fill 2,$EE ; remaining
 
 ;############################################################################
 *=$0314     ; IRQ, BRK and NMI Vectors to keep
@@ -746,9 +751,11 @@ Start:
             ; init game
             lda #2
             sta ShipX
-            sta Relics                  ; init at 2 to save code; need 3 so check for 5
+            lda #0
+            sta Relics
             lda #5
             sta ShipY
+            lda #MAX_HP
             sta ShipData+SH_HP
             lda #G_SPACESHIPR
             sta ShipGfx
@@ -902,7 +909,7 @@ BackIntoSpace2:
             ldx #T_YOUWIN
             lda #5
             jmp Restart
-.station:   ldx #5
+.station:   ldx #MAX_HP
             stx ShipData+SH_HP
             jsr DrawHealthAt024
             ldx #T_SCOTTY
@@ -1272,8 +1279,11 @@ NextRound:
 
             ; TORPEDO
 .playertorpedo:
-            ; TODO calc hit
-            jmp .playermisses ; DEBUG
+            ; calc hit
+            lda ZP_RNG_LOW
+            ldx ShipData+SH_HITCHANCE
+            cmp HitChanceData,x
+            bcs .playermisses
 
             ; hit: move to enemy, fire hit, evade enemy
             ldx #ShipData
@@ -1302,7 +1312,12 @@ NextRound:
             ; enemy move
 .enemyturn:
             ; TORPEDO
-            ; TODO calc hit
+            ; calc hit
+            lda ZP_RNG_LOW
+            ldx RaiderData+SH_HITCHANCE
+            cmp HitChanceData,x
+            bcs .enemymisses
+
             ; hit: move to player, fire hit, evade player
             ldx #RaiderData
             lda ShipData+SH_YOFF
