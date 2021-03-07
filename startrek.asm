@@ -104,16 +104,17 @@ MENU_TORPEDO=20
 !addr NewShipY = $2F
 !addr ShipData = $30
       SH_HP=0           ; hit points 0..7
-      SH_YOFF=1         ; Y-offset on screen 0..18
-      SH_HITCHANCE=2
+      SH_HITCHANCE=1
+      SH_GFX=2          ; graphic to draw (L or R)
       SH_SHIELD=3       ; shield 0..3
-      SIZEOF_SH=4
-!addr ShipGfx = $34     ; graphic to draw (L or R)
+      SH_YOFF=4         ; Y-offset on screen 0..18
+      SIZEOF_SH=5
 !addr RaiderData=$35
     ; SH_HP
-    ; SH_YOFF
     ; SH_HITCHANCE
+    ; SH_GFX
     ; SH_SHIELD
+    ; SH_YOFF
 ; $C0-$FF is taken by torpedo sprite
 
 ;############################################################################
@@ -262,6 +263,7 @@ JoystickValueToOffset:
 ; KEYBOARD / JOYSTICK INPUT
 ;----------------------------------------------------------------------------
 
+; Puts speech text A by speaker X at 0/24 and wait for joystick (clobbers A,X,Y)
 DrawSpeechReadJoystick:
             jsr DrawSpeechLine
 DebouncedReadJoystick:
@@ -322,30 +324,38 @@ EraseAtCursor:
 *=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
             !fill 5,0
 
-DebounceJoystick:
--           jsr ReadJoystick
-            bne -
+; init fight against raider Y
+InitFight:
+            ldx #SIZEOF_INITFIGHTDATA-1
+-           lda InitFightData,x
+            sta ShipData+SH_HITCHANCE,x
+            lda InitFightData,y
+            sta RaiderData+SH_HP,x
+            dey
+            dex
+            bpl -
             rts
-
-            !fill 11,$EE ; remaining
 
 ;############################################################################
 *=$028D     ; 028D-028E 2 bytes TRASHED DURING LOADING
             !fill 2,0
 
-InitFight:
-            ldx #SIZEOF_INITFIGHTDATA-1
--           lda InitFightData,x
-            sta ShipData+2,x
-            dex
-            bpl -
-            rts
-
-; Ship/Raider fight init
+; Ship fight init data
 InitFightData:
-    ; Ship: HITCHANCE,SHIELD,SHIPGFX Raider: HP,YOFF,HITCHANCE
-    !byte   1,        2,     G_SPACESHIPR,   3, 0,   0
-SIZEOF_INITFIGHTDATA=*-InitFightData
+    ;       HITCHANCE, GFX,          SHIELD, (YOFF overwritten)
+    !byte   1,         G_SPACESHIPR, 2   ; , 0
+    FIGHT_SMALLRAIDER=*-InitFightData+SIZEOF_INITFIGHTDATA-1
+    ;       HP, HITCHANCE, GFX,         SHIELD
+    !byte   4,  3,         G_RAIDER,    0
+    FIGHT_LARGERAIDER=*-InitFightData+SIZEOF_INITFIGHTDATA-1
+    ;       HP, HITCHANCE, GFX,         SHIELD
+    !byte   6,  2,         G_ENEMYSHIP, 1
+SIZEOF_INITFIGHTDATA=4
+
+DebounceJoystick:
+-           jsr ReadJoystick
+            bne -
+            rts
 
             !fill 1,$EE ; remaining
 
@@ -490,7 +500,7 @@ TextData:
     T_RAIDERS=*-TextData
     !scr ":raiders detected",'!'+128
     T_STATION=*-TextData
-    !scr ":fully repaired",'!'+128
+    !scr ":repaired",'!'+128
     T_FIGHT_MENU=*-TextData
     !scr "flee    < evasive > torped",'o'+128
     T_YOUWIN=*-TextData
@@ -499,6 +509,8 @@ TextData:
     !scr "game over",'!'+128
     T_RELICFOUND=*-TextData
     !scr "q:haha here's a relic",'!'+128
+    T_LOST=*-TextData
+    !scr " lost",'!'+128
     T_KIRK=*-TextData
     !scr "kir",'k'+128
     T_JLUC=*-TextData
@@ -758,7 +770,7 @@ Start:
             lda #MAX_HP
             sta ShipData+SH_HP
             lda #G_SPACESHIPR
-            sta ShipGfx
+            sta ShipData+SH_GFX
 
 BackIntoSpace:
             jsr DrawSpaceMap
@@ -861,14 +873,14 @@ BackIntoSpace2:
             lda #G_SPACESHIPL
             bcc +                       ; NewShipX < ShipX => L
             lda #G_SPACESHIPR           ; otherwise        => R
-+           sta ShipGfx
++           sta ShipData+SH_GFX
 
 .MoveShip:
 .fixupDX:   inc ShipX   ; SELF-MODIFIED BIT/INC/DEC
 .fixupDY:   inc ShipY   ; SELF-MODIFIED BIT/INC/DEC
             lda ShipX
             ldy ShipY
-            ldx ShipGfx
+            ldx ShipData+SH_GFX
             jsr DrawGfxObject
 !if DEBUG=0 {
 -           lda #$F0
@@ -939,6 +951,7 @@ BackIntoSpace2:
             ldx #T_WORF
             lda #T_RAIDERS
             jsr DrawSpeechReadJoystick
+            ldy #FIGHT_SMALLRAIDER
             jmp ShipFight
 
 .planet:    ldx #T_JLUC
@@ -1156,14 +1169,14 @@ DrawSpaceMap:
             ; draw ship
             lda ShipX
             ldy ShipY
-            ldx ShipGfx
             ; fixup so that the ship ends 1 space off DS709
             cmp #2
             bne +
             cpy #5
             bne +
             iny
-+           jmp DrawGfxObject
++           ldx ShipData+SH_GFX
+            jmp DrawGfxObject
 
 ; clear the entire screen (clobbers A,Y)
 Cls:
@@ -1201,6 +1214,7 @@ DrawSectorMarks:
 ; SHIP FIGHT
 ;--------------------------------------------------------------
 
+; fight raider type Y
 ShipFight:
             ; init
             jsr InitFight
@@ -1217,7 +1231,7 @@ NextRound:
             stx MenuChoice              ; invalidate
             jsr DebounceJoystick
 
-            lda ShipGfx
+            lda ShipData+SH_GFX
             cmp #G_SPACESHIPL           ; escaped?
             bne .loopmenu
 .endfight:  jmp BackIntoSpace
@@ -1265,7 +1279,7 @@ NextRound:
             lda #0                      ; drop shield
             sta ShipData+SH_SHIELD
             lda #G_SPACESHIPL           ; turn around
-            sta ShipGfx
+            sta ShipData+SH_GFX
             bne ++                      ; always
 
 +           cpy #MENU_EVASIVE
@@ -1410,11 +1424,11 @@ ClsDrawFight:
 DrawFight:
             lda #8
             ldy ShipData+SH_YOFF
-            ldx ShipGfx
+            ldx ShipData+SH_GFX
             jsr DrawGfxObject
             lda #28
             ldy RaiderData+SH_YOFF
-            ldx #G_ENEMYSHIP
+            ldx RaiderData+SH_GFX
             jsr DrawGfxObject
             lda #0
             ldy #22
@@ -1425,11 +1439,13 @@ DrawFight:
             ldy #8
             ldx ShipData+SH_HP
             jsr DrawHealth
-            ldx ShipData+SH_SHIELD
             ; draw player shield bar X at cursor+Y
+            ldx ShipData+SH_SHIELD
+            lda #$4E                    ; /
+; draw health bar X with character A at cursor+Y (clobbers X,Y)
+DrawHealthBarX:
 -           dex
             bmi +                       ; done
-            lda #$4E                    ; /
             sta (_CursorPos),y
             iny
             bne -                       ; always
@@ -1512,12 +1528,8 @@ DrawHealth:
             lda #$E9                    ; /|
             sta (_CursorPos),y
             iny
--           dex
-            bmi +
             lda #$CE                    ; /
-            sta (_CursorPos),y
-            iny
-            bne -
+            jsr DrawHealthBarX
 +           lda #$69                    ; |/
             sta (_CursorPos),y
             iny
