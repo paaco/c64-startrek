@@ -72,6 +72,8 @@ SPRITE_EXPLOSION=12
 EXPLOSION_DELAY=25 ; #vblanks between animation frames
 NEEDED_RELICS=3
 MAX_HP=5 ; maximum HP
+HP_S=4 ; small raider
+HP_L=6 ; large raider
 MENU_FLEE=0
 MENU_EVASIVE=10
 MENU_TORPEDO=20
@@ -342,15 +344,15 @@ InitFight:
 
 ; Ship fight init data
 InitFightData:
-    ;       HITCHANCE, GFX,          SHIELD, (YOFF overwritten)
-    !byte   1,         G_SPACESHIPR, 2   ; , 0
+    ;              HITCHANCE, GFX,          SHIELD
+    !byte          1,         G_SPACESHIPR, 2
     FIGHT_SMALLRAIDER=*-InitFightData+SIZEOF_INITFIGHTDATA-1
-    ;       HP, HITCHANCE, GFX,         SHIELD
-    !byte   4,  3,         G_RAIDER,    0
+    ;       HP,    HITCHANCE, GFX
+    !byte   HP_S,  3,         G_RAIDER
     FIGHT_LARGERAIDER=*-InitFightData+SIZEOF_INITFIGHTDATA-1
-    ;       HP, HITCHANCE, GFX,         SHIELD
-    !byte   6,  2,         G_ENEMYSHIP, 1
-SIZEOF_INITFIGHTDATA=4
+    ;       HP,    HITCHANCE, GFX
+    !byte   HP_L,  2,         G_ENEMYSHIP
+SIZEOF_INITFIGHTDATA=3
 
 DebounceJoystick:
 -           jsr ReadJoystick
@@ -496,7 +498,7 @@ TextData:
     T_WHERETO=*-TextData
     !scr ":where",'?'+128
     T_LETSGO=*-TextData
-    !scr ":m-class planet! beam down",'!'+128
+    !scr ":yes! now beam down",'!'+128
     T_RAIDERS=*-TextData
     !scr ":raiders detected",'!'+128
     T_STATION=*-TextData
@@ -931,30 +933,28 @@ BackIntoSpace2:
 
             ; planet?
 +           cmp #PLANET
-            beq .planet
+            bne +
+            ; planets are guarded by large raider bosses
+            ldy #FIGHT_LARGERAIDER
+            bne .shipfight              ; always
 
-            ; else => random % raiders
-            sta Tmp1                    ; chance on raiders
+            ; else blank space contains A % raiders
++           sta Tmp1                    ; chance on raiders
             jsr Random
             cmp Tmp1
-            bcc .raiders                ; yup
+            bcc +                       ; yup
             jmp BackIntoSpace           ; no raiders
-            ; raiders detected
-.raiders:   ldy ShipX
-            iny
-            tya
-            ldy ShipY
-            dey
-            dey
-            ldx #G_RAIDER
-            jsr DrawGfxObject
-            ldx #T_WORF
-            lda #T_RAIDERS
-            jsr DrawSpeechReadJoystick
-            ldy #FIGHT_SMALLRAIDER
-            jmp ShipFight
+            ; small raiders in space
++           ldy #FIGHT_SMALLRAIDER
+.shipfight: jmp ShipFight
 
-.planet:    ldx #T_JLUC
+
+;----------------------------------------------------------------------------
+; PLANET
+;----------------------------------------------------------------------------
+
+TransportToPlanet:
+            ldx #T_JLUC
             lda #T_LETSGO
             jsr DrawSpeechReadJoystick
 
@@ -1094,10 +1094,6 @@ loop:
 ; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
 
 
-;----------------------------------------------------------------------------
-; PLANET
-;----------------------------------------------------------------------------
-
 ; draw planet surface (column wise)
 DrawPlanetSurface:
             lda #0
@@ -1216,8 +1212,23 @@ DrawSectorMarks:
 
 ; fight raider type Y
 ShipFight:
-            ; init
             jsr InitFight
+            ; show raider on map and shout alert
+            ldy ShipX
+            iny
+            iny
+            tya
+            ldy ShipY
+            dey
+            dey
+            dey
+            ldx RaiderData+SH_GFX
+            jsr DrawGfxObject
+            ldx #T_WORF
+            lda #T_RAIDERS
+            jsr DrawSpeechReadJoystick
+
+            ; init
             jsr Random
             and #$07                    ; 0..7
             clc
@@ -1308,8 +1319,13 @@ NextRound:
             dec RaiderData+SH_HP
             jsr ClsDrawFight
             lda RaiderData+SH_HP        ; raider destroyed?
-            beq .endfight
-            jsr EnemyEvasiveManouver
+            bne +                       ; no
+            ; small raider destroyed?
+            lda RaiderData+SH_GFX
+            cmp #G_RAIDER
+            beq .endfight               ; yes, back into space
+            jmp TransportToPlanet       ; otherwise destroyed planet boss
++           jsr EnemyEvasiveManouver
             bmi .playerlockon           ; always
             ; miss: evade, fire miss
 .playermisses:
