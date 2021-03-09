@@ -117,6 +117,10 @@ MENU_TORPEDO=20
     ; SH_GFX
     ; SH_SHIELD
     ; SH_YOFF
+!addr Captains=$3A
+!addr PlanetBits=$3B    ; current planet bitmask (%001,%010,%100)
+!addr RelicBits=$3C     ; PlanetBits that you already got relic from (or'ed together)
+!addr CaptainsList=$B8  ; list of usable captains (init'ed when setting up torpedo sprite)
 ; $C0-$FF is taken by torpedo sprite
 
 ;############################################################################
@@ -199,15 +203,18 @@ PackedLineOffsets:
     !for L,0,24 { !byte (($0400+L*40) & $FF)|(($0400+L*40)>>8) }
 
 ; 3*5 sector map stored as 2*8+5 bytes
-STATION=1
-S_DS709=2
-SPACE5=128 ; >3 means X/256 chance on raiders
+STATION=%00000011 ; 2 bits set can never be a planet
+S_DS709=%00000101
+SPACE5=128 ; >=128 means X/256 chance on raiders
 SPACE8=200
-PLANET=3
+; bitmasks as planet "names" used to keep track of which you visited
+PLANET1=%00000001
+PLANET2=%00000010
+PLANET3=%00000100
 SpaceMap:
-            !byte S_DS709, SPACE5, SPACE8, PLANET,STATION,0,0,0
+            !byte S_DS709, SPACE5, SPACE8,PLANET2,STATION,0,0,0
             !byte  SPACE5, SPACE8, SPACE8, SPACE8, SPACE5,0,0,0
-            !byte STATION, SPACE5, PLANET, SPACE8, PLANET
+            !byte STATION, SPACE5,PLANET1, SPACE8,PLANET3
 
 ;############################################################################
 *=$01ED     ; 13 bytes INCLUDING RETURN ADDRESS TRASHED WHILE LOADING
@@ -243,12 +250,12 @@ DeltaXYData:
     !byte -1,-1 ; overflow
 
 ; Transform 16 joystick values 111FRLDU (low active) to rotation offsets
-JoystickValueToOffset:
-    !byte 8 ; %0000 illegal
-    !byte 8 ; %0001 illegal
-    !byte 8 ; %0010 illegal
-    !byte 8 ; %0011 illegal
-    !byte 8 ; %0100 illegal
+JoystickValueToOffset=*-5 ; skipping the first 5
+;    !byte 8 ; %0000 illegal
+;    !byte 8 ; %0001 illegal
+;    !byte 8 ; %0010 illegal
+;    !byte 8 ; %0011 illegal
+;    !byte 8 ; %0100 illegal
     !byte 4 ; %0101 RIGHT/DOWN
     !byte 2 ; %0110 RIGHT/UP
     !byte 3 ; %0111 RIGHT
@@ -259,7 +266,11 @@ JoystickValueToOffset:
     !byte 8 ; %1100 illegal
     !byte 5 ; %1101 DOWN
     !byte 1 ; %1110 UP
-    !byte 8 ; %1111 illegal
+;    !byte 8 ; %1111 illegal
+
+CaptainInitData:
+    !byte T_KIRK, T_JLUC, T_KATH, T_ARCH, T_SARU, T_MIKL
+SIZEOF_CAPTAINS=*-CaptainInitData
 
 ;----------------------------------------------------------------------------
 ; KEYBOARD / JOYSTICK INPUT
@@ -498,19 +509,23 @@ TextData:
     T_WHERETO=*-TextData
     !scr ":where",'?'+128
     T_LETSGO=*-TextData
-    !scr ":yes! now beam down",'!'+128
+    !scr ":yes! beam down",'!'+128
     T_RAIDERS=*-TextData
-    !scr ":raiders detected",'!'+128
+    !scr ":raider on sensor!",'!'+128
     T_STATION=*-TextData
     !scr ":repaired",'!'+128
     T_FIGHT_MENU=*-TextData
     !scr "flee    < evasive > torped",'o'+128
     T_YOUWIN=*-TextData
-    !scr "relics at ds709. earth saved",'!'+128
+    !scr "all relics at ds709. earth saved",'!'+128
     T_GAMEOVER=*-TextData
     !scr "game over",'!'+128
-    T_RELICFOUND=*-TextData
-    !scr "q:haha here's a relic",'!'+128
+    T_Q=*-TextData
+    !scr "q:your",' '+128
+    T_MYLIFE4RELIC=*-TextData
+    !scr ":my "
+    T_LIFE4RELIC=*-TextData
+    !scr "life for a relic",'!'+128
     T_LOST=*-TextData
     !scr " lost",'!'+128
     T_KIRK=*-TextData
@@ -590,12 +605,12 @@ INIT:
             lda #$81
             sta SID+V3+WV               ; voice3 gate-on noise for random
 
-            ; create torpedo sprite
-            ldx #63
+            ; create torpedo sprite at $C0 (and prepare Captains array)
+            ldx #63+8
             ldy #0
--           sty $C0,x
+-           sty $C0-8,x
             dex
-            bne -
+            bpl -
             lda #%11111110
             sta $C0+11*3
             lsr
@@ -767,12 +782,19 @@ Start:
             sta ShipX
             lda #0
             sta Relics
+            sta RelicBits
             lda #5
             sta ShipY
             lda #MAX_HP
             sta ShipData+SH_HP
             lda #G_SPACESHIPR
             sta ShipData+SH_GFX
+            ldx #SIZEOF_CAPTAINS
+            stx Captains
+-           lda CaptainInitData-1,x
+            sta CaptainsList-1,x
+            dex
+            bne -
 
 BackIntoSpace:
             jsr DrawSpaceMap
@@ -911,11 +933,14 @@ BackIntoSpace2:
             tax
             lda SpaceMap,x
 
+            ; raiders?
+            bmi .raiders
+
             ; station?
             cmp #STATION
             beq .station
             cmp #S_DS709
-            bne +
+            bne .planet
 .ds709:     lda Relics
             cmp #NEEDED_RELICS
             bne .station
@@ -932,14 +957,13 @@ BackIntoSpace2:
             jmp BackIntoSpace
 
             ; planet?
-+           cmp #PLANET
-            bne +
+.planet:    sta PlanetBits              ; store planet "name"
             ; planets are guarded by large raider bosses
             ldy #FIGHT_LARGERAIDER
             bne .shipfight              ; always
 
             ; else blank space contains A % raiders
-+           sta Tmp1                    ; chance on raiders
+.raiders:   sta Tmp1                    ; chance on raiders
             jsr Random
             cmp Tmp1
             bcc +                       ; yup
@@ -953,46 +977,63 @@ BackIntoSpace2:
 ; PLANET
 ;----------------------------------------------------------------------------
 
+; the away team always starts in the same position
+InitAwayTeamData:
+    !byte   6,  8, 10,  4,  2
+    !byte  16, 14, 18, 19, 15
+
 TransportToPlanet:
-            ldx #T_JLUC
+            ; check that you still need a relic from this planet
+            lda PlanetBits
+            ora RelicBits
+            cmp RelicBits ; same? then you already got the relic from this planet
+            bne +
+            jmp BackIntoSpace
+            ; is there a captain still alive? TODO: this might not be the best location
++           lda Captains
+            bne +
+            jmp GameOver
++
+            ; grab random captain name in X
+-           jsr Random
+            and #$07
+            tay
+            ldx CaptainsList,y
+            beq -
+            lda #0
+            sta CaptainsList,y              ; mark captain as used
+            dec Captains
+
+            stx AwayTeam+TM_CAPTAIN_NAME
+            lda TextData,x
+            sta AwayTeam+TM_CAPTAIN     ; head
             lda #T_LETSGO
             jsr DrawSpeechReadJoystick
 
             lda #COL_BORDER
             sta $D020
             jsr DrawPlanetSurface
-
             lda #36
             ldy #11
             ldx #G_TEMPLE
             jsr DrawGfxObject
 
-            ; DEBUG setup away team
-            lda #'J'-64                 ; JLUC
-            sta AwayTeam+TM_CAPTAIN
-            lda #T_JLUC
-            sta AwayTeam+TM_CAPTAIN_NAME
-            lda #13
-            sta AwayTeam+TM_MEMBERS_X+0
-            lda #18
-            sta AwayTeam+TM_MEMBERS_Y+0
-            lda #10
-            sta AwayTeam+TM_MEMBERS_X+1
-            lda #16
-            sta AwayTeam+TM_MEMBERS_Y+1
-            lda #5
-            sta AwayTeam+TM_MEMBERS_X+2
-            lda #20
-            sta AwayTeam+TM_MEMBERS_Y+2
-            lda #$FF
-            sta AwayTeam+TM_MEMBERS_X+3
-            sta AwayTeam+TM_MEMBERS_X+4
+            ; TODO Captain lost (lose condition)
+            ; ldx AwayTeam+TM_CAPTAIN_NAME
+            ; lda #T_LOST
+            ; jsr DrawSpeechReadJoystick
+            ; jmp BackIntoSpace
 
-            ; transporting all members of the away team at the same time
-            lda #0
-            sta Tmp2                    ; init transporter phase#
+            ; create away team (captain is member 0)
+            ldx #10-1
+-           lda InitAwayTeamData,x
+            sta AwayTeam+TM_MEMBERS_X,x
+            dex
+            bpl -
 
---          ldx #0
+            ; transport away team
+            stx Tmp2                    ; init transporter phase#
+--          ldx #LEN_TM_MEMBERS-1
 -           stx Tmp1                    ; init member#
             lda AwayTeam+TM_MEMBERS_X,x
             bmi +                       ; dead?
@@ -1001,9 +1042,8 @@ TransportToPlanet:
             jsr SetCoordinates
             jsr DrawTransporter
 +           ldx Tmp1
-            inx
-            cpx #LEN_TM_MEMBERS
-            bne -
+            dex
+            bpl -
             ; visual delay
             ldy #TRANSPORTER_DELAY
 -
@@ -1018,29 +1058,25 @@ TransportToPlanet:
             cmp #SIZEOF_TRANSPORTERBEAM
             bne --
 
-loop:
+PlanetLoop:
             ; draw Away Team persons
-            ldx #0                      ; init member#
+            ldx #LEN_TM_MEMBERS-1       ; init member#
 -           lda AwayTeam+TM_MEMBERS_X,x
             bmi +                       ; dead?
             ldy AwayTeam+TM_MEMBERS_Y,x
             jsr SetCoordinates
             lda AwayTeam+TM_CAPTAIN     ; head symbol
             jsr DrawPersonBasedOnX
-+           inx
-            cpx #LEN_TM_MEMBERS
-            bne -
++           dex
+            bpl -
 
             jsr DebouncedReadJoystick
 
-            ;jmp BackIntoSpace
-
             ; move team based on Joystick
-            ldx #0
+            ldx #LEN_TM_MEMBERS-1
 -           stx Tmp2                    ; member#
             lda AwayTeam+TM_MEMBERS_X,x
             bmi ++                      ; dead?
-
             ldy AwayTeam+TM_MEMBERS_Y,x
             jsr ErasePersonAt           ; sets cursor and erases person (to be able to walk through yourself)
             ; fixup cursor for scan around (-41)
@@ -1083,12 +1119,24 @@ loop:
             adc AwayTeam+TM_MEMBERS_Y,x
             sta AwayTeam+TM_MEMBERS_Y,x
             ; TODO draw Person again (otherwise you can walk through people)
-
 ++          ldx Tmp2
-            inx
-            cpx #LEN_TM_MEMBERS
-            bne -
+            dex
+            bpl -
 
+            ; jmp PlanetLoop DEBUG
+
+DebugTestWinPlanet:
+            ; relic of planet captured
+            lda PlanetBits
+            ora RelicBits
+            sta RelicBits
+            inc Relics
+            lda #T_LIFE4RELIC
+            ldx #T_Q
+            jsr DrawSpeechReadJoystick
+            lda #T_MYLIFE4RELIC
+            ldx AwayTeam+TM_CAPTAIN_NAME
+            jsr DrawSpeechReadJoystick
             jmp BackIntoSpace
 
 ; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
@@ -1162,8 +1210,21 @@ DrawSpaceMap:
             ; draw ship health
             ldx ShipData+SH_HP
             jsr DrawHealthAt024
+            ; captains
+            lda #'C'-64
+            sta $0400+40*24+38
+            lda Captains
+            ora #$30
+            sta $0401+40*24+38
+            ; draw relics
+            lda #$D8                      ; TODO symbol
+            ldx Relics
+-           beq +
+            sta $0400+24*40+33,x
+            dex
+            bpl -
             ; draw ship
-            lda ShipX
++           lda ShipX
             ldy ShipY
             ; fixup so that the ship ends 1 space off DS709
             cmp #2
@@ -1361,7 +1422,7 @@ NextRound:
 +           jsr ClsDrawFight
             lda ShipData+SH_HP          ; ship destroyed?
             bne +
-            ldx #T_GAMEOVER
+GameOver:   ldx #T_GAMEOVER
             lda #15
             jmp Restart
 +           jsr PlayerEvasiveManouver
