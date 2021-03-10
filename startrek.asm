@@ -506,60 +506,130 @@ HitChanceData:
 
             ; DATA (032A-0400 = 214 bytes)
 
+; the away team always starts in the same position
+InitAwayTeamData:
+    !byte   6,  8, 10,  4,  2
+    !byte  16, 14, 18, 19, 15
+
+SentinelsX:
+    !byte 32,33,36
+SentinelsY:
+    !byte 13,17,20
+NR_SENTINELS=*-SentinelsY
+
+;--------------------------------------------------------------
+; DRAW GFX OBJECT
+;--------------------------------------------------------------
+
+; draw object X from ObjectListData (clobbers A,X,Y)
+DrawGfxObjectFromList:
+            lda ObjectListData,x
+            pha
+            ldy ObjectListData+1,x
+            lda ObjectListData+2,x
+            tax
+            pla
+; draw object X at A/Y (clobbers A,X,Y)
+DrawGfxObject:
+            jsr SetCoordinates
+            lda GfxObjectsData+GO_WIDTH,x
+            sta ObjWidth
+            lda GfxObjectsData+GO_HEIGHT,x
+            sta ObjHeight
+            lda GfxObjectsData+GO_OFFSET,x
+            tax
+--          ldy #0
+-           lda GfxData,x               ; $BD=lda,x / $AD=lda to erase
+            inx
+            sta (_CursorPos),y
+            iny
+            cpy ObjWidth
+            bne -
+            lda #40
+            jsr AddAToCursor
+            dec ObjHeight
+            bne --
+            rts
+
+
 ;----------------------------------------------------------------------------
-; TEXTS
+; SPACE MAP
 ;----------------------------------------------------------------------------
 
-TextData:
-    !byte CHR_SPACE                     ; X should stay 0 to erase text
-    T_WHERETO=*-TextData
-    !scr ":where",'?'+128
-    T_LETSGO=*-TextData
-    !scr ":yes! beam down",'!'+128
-    T_RAIDERS=*-TextData
-    !scr ":raider on sensors",'!'+128
-    T_STATION=*-TextData
-    !scr ":repaired",'!'+128
-    T_FIGHT_MENU=*-TextData
-    !scr "flee    < evasive > torped",'o'+128
-    T_YOUWIN=*-TextData
-    !scr "relics at ds709. earth saved",'!'+128
-    T_GAMEOVER=*-TextData
-    !scr "game over",'!'+128
-    T_Q=*-TextData
-    !scr "q:your",' '+128
-    T_MYLIFE4RELIC=*-TextData
-    !scr ":my "
-    T_LIFE4RELIC=*-TextData
-    !scr "life for a relic",'!'+128
-    T_TEAM=*-TextData
-    !scr "tea",'m'+128
-    T_LOST=*-TextData
-    !scr " lost",'!'+128
-    T_KIRK=*-TextData
-    !scr "kir",'k'+128
-    T_JLUC=*-TextData
-    !scr "jlu",'c'+128
-    T_KATH=*-TextData
-    !scr "kat",'h'+128
-    T_ARCH=*-TextData
-    !scr "arc",'h'+128
-    T_SARU=*-TextData
-    !scr "sar",'u'+128
-    T_MIKL=*-TextData
-    !scr "mik",'l'+128
-    T_CHEKOV=*-TextData
-    !scr "cheko",'v'+128
-    T_WESLEY=*-TextData
-    !scr "wesle",'y'+128
-    T_DETMER=*-TextData
-    !scr "detme",'r'+128
-    T_PARIS=*-TextData
-    !scr "pari",'s'+128
-    T_SCOTTY=*-TextData
-    !scr "scott",'y'+128
-    T_WORF=*-TextData
-    !scr "wor",'f'+128
+DrawSpaceMap:
+            jsr Cls
+            lda #COL_SCREEN
+            sta $D020                   ; in space everything looks the same
+            jsr DrawSectorMarks
+            ; draw objects
+            ldx #0
+-           stx Tmp1
+            jsr DrawGfxObjectFromList
+            lda Tmp1
+            clc
+            adc #3
+            tax
+            cpx #SIZEOF_OBJECTLIST
+            bne -
+            ; draw ship health
+            ldx ShipData+SH_HP
+            jsr DrawHealthAt024
+            ; captains
+            lda #'C'-64
+            sta $0400+40*24+38
+            lda Captains
+            ora #$30
+            sta $0401+40*24+38
+            ; draw relics
+            lda #$D8                      ; TODO symbol
+            ldx Relics
+-           beq +
+            sta $0400+24*40+33,x
+            dex
+            bpl -
+            ; draw ship
++           lda ShipX
+            ldy ShipY
+            ; fixup so that the ship ends 1 space off DS709
+            cmp #2
+            bne +
+            cpy #5
+            bne +
+            iny
++           ldx ShipData+SH_GFX
+            jmp DrawGfxObject
+
+; clear the entire screen (clobbers A,Y)
+Cls:
+            ldy #0
+            sty $C6                     ; fixup torpedo sprite
+-           lda #COL_TEXT
+            sta $D800,y
+            sta $D900,y
+            sta $DA00,y
+            sta $DB00,y
+            lda #CHR_SPACE
+            sta $0400,y
+            sta $0500,y
+            sta $0600,y
+            sta $06E8,y
+            iny
+            bne -
+            rts
+
+; plot sector marks every 8x8 corner (clobbers A,X,Y)
+DrawSectorMarks:
+            lda #CHR_SECTOR
+            ldy #5
+-           ldx SectorOffsetData,y
+            sta $0400,x
+            sta $0400+8*40,x
+            sta $0400+16*40,x
+            sta $0400+24*40,x
+            dey
+            bpl -
+            rts
+
 
 ;############################################################################
 *=$0400     ; SCREEN (WILL BE WIPED)
@@ -985,17 +1055,6 @@ BackIntoSpace2:
 ; PLANET
 ;----------------------------------------------------------------------------
 
-; the away team always starts in the same position
-InitAwayTeamData:
-    !byte   6,  8, 10,  4,  2
-    !byte  16, 14, 18, 19, 15
-
-SentinelsX:
-    !byte 32,33,36
-SentinelsY:
-    !byte 13,17,20
-NR_SENTINELS=*-SentinelsY
-
 TransportToPlanet:
             ; check that you still need a relic from this planet
             lda PlanetBits
@@ -1357,85 +1416,6 @@ DrawPlanetSurface:
             rts
 
 
-;----------------------------------------------------------------------------
-; SPACE MAP
-;----------------------------------------------------------------------------
-
-DrawSpaceMap:
-            jsr Cls
-            lda #COL_SCREEN
-            sta $D020                   ; in space everything looks the same
-            jsr DrawSectorMarks
-            ; draw objects
-            ldx #0
--           stx Tmp1
-            jsr DrawGfxObjectFromList
-            lda Tmp1
-            clc
-            adc #3
-            tax
-            cpx #SIZEOF_OBJECTLIST
-            bne -
-            ; draw ship health
-            ldx ShipData+SH_HP
-            jsr DrawHealthAt024
-            ; captains
-            lda #'C'-64
-            sta $0400+40*24+38
-            lda Captains
-            ora #$30
-            sta $0401+40*24+38
-            ; draw relics
-            lda #$D8                      ; TODO symbol
-            ldx Relics
--           beq +
-            sta $0400+24*40+33,x
-            dex
-            bpl -
-            ; draw ship
-+           lda ShipX
-            ldy ShipY
-            ; fixup so that the ship ends 1 space off DS709
-            cmp #2
-            bne +
-            cpy #5
-            bne +
-            iny
-+           ldx ShipData+SH_GFX
-            jmp DrawGfxObject
-
-; clear the entire screen (clobbers A,Y)
-Cls:
-            ldy #0
-            sty $C6                     ; fixup torpedo sprite
--           lda #COL_TEXT
-            sta $D800,y
-            sta $D900,y
-            sta $DA00,y
-            sta $DB00,y
-            lda #CHR_SPACE
-            sta $0400,y
-            sta $0500,y
-            sta $0600,y
-            sta $06E8,y
-            iny
-            bne -
-            rts
-
-; plot sector marks every 8x8 corner (clobbers A,X,Y)
-DrawSectorMarks:
-            lda #CHR_SECTOR
-            ldy #5
--           ldx SectorOffsetData,y
-            sta $0400,x
-            sta $0400+8*40,x
-            sta $0400+16*40,x
-            sta $0400+24*40,x
-            dey
-            bpl -
-            rts
-
-
 ;--------------------------------------------------------------
 ; SHIP FIGHT
 ;--------------------------------------------------------------
@@ -1782,40 +1762,60 @@ DrawHealth:
 ++          rts
 
 
-;--------------------------------------------------------------
-; DRAW GFX OBJECT
-;--------------------------------------------------------------
+;----------------------------------------------------------------------------
+; TEXTS
+;----------------------------------------------------------------------------
 
-; draw object X from ObjectListData (clobbers A,X,Y)
-DrawGfxObjectFromList:
-            lda ObjectListData,x
-            pha
-            ldy ObjectListData+1,x
-            lda ObjectListData+2,x
-            tax
-            pla
-; draw object X at A/Y (clobbers A,X,Y)
-DrawGfxObject:
-            jsr SetCoordinates
-            lda GfxObjectsData+GO_WIDTH,x
-            sta ObjWidth
-            lda GfxObjectsData+GO_HEIGHT,x
-            sta ObjHeight
-            lda GfxObjectsData+GO_OFFSET,x
-            tax
---          ldy #0
--           lda GfxData,x               ; $BD=lda,x / $AD=lda to erase
-            inx
-            sta (_CursorPos),y
-            iny
-            cpy ObjWidth
-            bne -
-            lda #40
-            jsr AddAToCursor
-            dec ObjHeight
-            bne --
-            rts
-
+TextData:
+    !byte CHR_SPACE                     ; X should stay 0 to erase text
+    T_WHERETO=*-TextData
+    !scr ":where to now",'?'+128
+    T_LETSGO=*-TextData
+    !scr ":yes! let's beam down",'!'+128
+    T_RAIDERS=*-TextData
+    !scr ":raider on sensors",'!'+128
+    T_STATION=*-TextData
+    !scr ":repaired at station",'!'+128
+    T_FIGHT_MENU=*-TextData
+    !scr "flee    < evasive > torped",'o'+128
+    T_YOUWIN=*-TextData
+    !scr "all relics at ds709. earth saved",'!'+128
+    T_GAMEOVER=*-TextData
+    !scr "game over",'!'+128
+    T_Q=*-TextData
+    !scr "q:your",' '+128
+    T_MYLIFE4RELIC=*-TextData
+    !scr ":my "
+    T_LIFE4RELIC=*-TextData
+    !scr "life for a relic",'!'+128
+    T_TEAM=*-TextData
+    !scr "tea",'m'+128
+    T_LOST=*-TextData
+    !scr " lost",'!'+128
+    T_KIRK=*-TextData
+    !scr "kir",'k'+128
+    T_JLUC=*-TextData
+    !scr "jean lu",'c'+128
+    T_KATH=*-TextData
+    !scr "katherin",'e'+128
+    T_ARCH=*-TextData
+    !scr "arche",'r'+128
+    T_SARU=*-TextData
+    !scr "sar",'u'+128
+    T_MIKL=*-TextData
+    !scr "michae",'l'+128
+    T_CHEKOV=*-TextData
+    !scr "cheko",'v'+128
+    T_WESLEY=*-TextData
+    !scr "wesle",'y'+128
+    T_DETMER=*-TextData
+    !scr "detme",'r'+128
+    T_PARIS=*-TextData
+    !scr "pari",'s'+128
+    T_SCOTTY=*-TextData
+    !scr "scott",'y'+128
+    T_WORF=*-TextData
+    !scr "wor",'f'+128
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
