@@ -66,6 +66,7 @@ COL_TEXT=GREEN
 ; constants
 CHR_SPACE=32+DEBUG*10 ; space or star
 CHR_SECTOR=91 ; standing cross
+CHR_LASER=67 ; line
 TRANSPORTER_DELAY=8 ; #vblanks between animation frames
 SPRITE_TORPEDO=3
 SPRITE_EXPLOSION=12
@@ -77,6 +78,9 @@ HP_L=6 ; large raider
 MENU_FLEE=0
 MENU_EVASIVE=10
 MENU_TORPEDO=20
+TEMPLE_X=36
+TEMPLE_Y=11
+SENTINEL_RESET=5
 
 ; ZP addresses
 !addr Joystick=$02
@@ -120,6 +124,7 @@ MENU_TORPEDO=20
 !addr Captains=$3A
 !addr PlanetBits=$3B    ; current planet bitmask (%001,%010,%100)
 !addr RelicBits=$3C     ; PlanetBits that you already got relic from (or'ed together)
+!addr Sentinels=$40     ; NR_SENTINELS countdown value 0..7
 !addr CaptainsList=$B8  ; list of usable captains (init'ed when setting up torpedo sprite)
 ; $C0-$FF is taken by torpedo sprite
 
@@ -982,6 +987,12 @@ InitAwayTeamData:
     !byte   6,  8, 10,  4,  2
     !byte  16, 14, 18, 19, 15
 
+SentinelsX:
+    !byte 32,33,36
+SentinelsY:
+    !byte 13,17,20
+NR_SENTINELS=*-SentinelsY
+
 TransportToPlanet:
             ; check that you still need a relic from this planet
             lda PlanetBits
@@ -1013,10 +1024,35 @@ TransportToPlanet:
             lda #COL_BORDER
             sta $D020
             jsr DrawPlanetSurface
-            lda #36
-            ldy #11
+            lda #TEMPLE_X
+            ldy #TEMPLE_Y
             ldx #G_TEMPLE
             jsr DrawGfxObject
+
+            ; create sentinals
+            ldx #NR_SENTINELS-1
+--          lda #0
+            ldy SentinelsY,x
+            jsr SetCoordinates
+            ldy SentinelsX,x
+            lda #$9F
+            sta (_CursorPos),y
+            jsr Random
+            and #$03
+            clc
+            adc #$02                    ; 2..5
+            sta Sentinels,x             ; start with random countdown
+            lda #10                     ; clear miminum firing distance
+            sta Tmp1
+-           dey
+            lda #CHR_SPACE
+            sta (_CursorPos),y
+            dec Tmp1
+            bne -
+            dex
+            bpl --
+
+            jsr UpdateSentinels
 
             ; TODO Captain lost (lose condition)
             ; ldx AwayTeam+TM_CAPTAIN_NAME
@@ -1025,7 +1061,7 @@ TransportToPlanet:
             ; jmp BackIntoSpace
 
             ; create away team (captain is member 0)
-            ldx #10-1
+            ldx #LEN_TM_MEMBERS*2-1
 -           lda InitAwayTeamData,x
             sta AwayTeam+TM_MEMBERS_X,x
             dex
@@ -1070,7 +1106,31 @@ PlanetLoop:
 +           dex
             bpl -
 
-            jsr DebouncedReadJoystick
+            jsr UpdateSentinels
+
+            ; test win condition: captain is in temple
+            lda AwayTeam+TM_MEMBERS_X
+            cmp #TEMPLE_X+1
+            bne +
+            lda AwayTeam+TM_MEMBERS_Y
+            cmp #TEMPLE_Y+2
+            bne +
+            ; relic of planet captured!
+            lda PlanetBits
+            ora RelicBits
+            sta RelicBits
+            inc Relics
+            lda #T_LIFE4RELIC
+            ldx #T_Q
+            jsr DrawSpeechReadJoystick
+            lda #T_MYLIFE4RELIC
+            ldx AwayTeam+TM_CAPTAIN_NAME
+            jsr DrawSpeechReadJoystick
+            jmp BackIntoSpace
++
+-           jsr DebouncedReadJoystick
+            and #%00010000              ; ignore move when FIRE is pressed
+            beq -
 
             ; move team based on Joystick
             ldx #LEN_TM_MEMBERS-1
@@ -1123,24 +1183,72 @@ PlanetLoop:
             dex
             bpl -
 
-            ; jmp PlanetLoop DEBUG
+            jmp PlanetLoop
 
-DebugTestWinPlanet:
-            ; relic of planet captured
-            lda PlanetBits
-            ora RelicBits
-            sta RelicBits
-            inc Relics
-            lda #T_LIFE4RELIC
-            ldx #T_Q
-            jsr DrawSpeechReadJoystick
-            lda #T_MYLIFE4RELIC
-            ldx AwayTeam+TM_CAPTAIN_NAME
-            jsr DrawSpeechReadJoystick
-            jmp BackIntoSpace
 
 ; TODO: if Dx/Dy is not possible, also try 0/Dy & Dx/0 or -Dx/Dy & Dx/-Dy
 
+; draw sentinel and fire lasers
+UpdateSentinels:
+            ldx #NR_SENTINELS-1
+--          lda #0
+            ldy SentinelsY,x
+            jsr SetCoordinates
+            jsr DrawSentinelCounter
+            cmp #$B0
+            bne +
+            ; fire laser until first non-space character
+            lda #CHR_LASER
+            jsr DrawSentinelLaser
+            ; TODO check and kill any characters (Y has the x-offset of impact <> 0)
+            lda #CHR_SPACE
+            jsr DrawSentinelLaser
+            lda #SENTINEL_RESET
+            sta Sentinels,x
+            jsr DrawSentinelCounter
++           dec Sentinels,x
+            dex
+            bpl --
+            rts
+
+; draw counter for sentinal X at cursor (clobbers A,Y) returns counter in A
+DrawSentinelCounter:
+            lda SentinelsX,x
+            clc
+            adc #40
+            tay
+            lda Sentinels,x
+            ora #$B0                    ; reverse digits
+            sta (_CursorPos),y
+            rts
+
+; draw laser of sentinel X with symbol A (clobbers A,Y,Tmp1)
+DrawSentinelLaser:
+            sta Tmp1
+            ldy SentinelsX,x
+            dey
+-           lda (_CursorPos),y
+            cmp #CHR_LASER
+            beq +                       ; always overwrite laser
+            cmp #CHR_SPACE
+            bne ++
++           lda Tmp1                    ; character
+            sta (_CursorPos),y
+            cmp #CHR_LASER
+            bne +
+            sty SID+V1+FH
+            lda #$21
+            sta SID+V1+WV               ; gate on
++
+--          cpy $D012
+            bne --
+            dey
+            bpl -
+++          lda #$00
+            sta SID+V1+FH
+            lda #$20
+            sta SID+V1+WV               ; gate off
+            rts
 
 ; draw planet surface (column wise)
 DrawPlanetSurface:
