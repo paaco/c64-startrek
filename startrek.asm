@@ -81,6 +81,7 @@ MENU_TORPEDO=20
 TEMPLE_X=36
 TEMPLE_Y=11
 SENTINEL_RESET=5
+MEMBER_DEAD=$DD ; marker for died member
 
 ; ZP addresses
 !addr Joystick=$02
@@ -516,13 +517,13 @@ TextData:
     T_LETSGO=*-TextData
     !scr ":yes! beam down",'!'+128
     T_RAIDERS=*-TextData
-    !scr ":raider on sensor!",'!'+128
+    !scr ":raider on sensors",'!'+128
     T_STATION=*-TextData
     !scr ":repaired",'!'+128
     T_FIGHT_MENU=*-TextData
     !scr "flee    < evasive > torped",'o'+128
     T_YOUWIN=*-TextData
-    !scr "all relics at ds709. earth saved",'!'+128
+    !scr "relics at ds709. earth saved",'!'+128
     T_GAMEOVER=*-TextData
     !scr "game over",'!'+128
     T_Q=*-TextData
@@ -531,6 +532,8 @@ TextData:
     !scr ":my "
     T_LIFE4RELIC=*-TextData
     !scr "life for a relic",'!'+128
+    T_TEAM=*-TextData
+    !scr "tea",'m'+128
     T_LOST=*-TextData
     !scr " lost",'!'+128
     T_KIRK=*-TextData
@@ -1054,12 +1057,6 @@ TransportToPlanet:
 
             jsr UpdateSentinels
 
-            ; TODO Captain lost (lose condition)
-            ; ldx AwayTeam+TM_CAPTAIN_NAME
-            ; lda #T_LOST
-            ; jsr DrawSpeechReadJoystick
-            ; jmp BackIntoSpace
-
             ; create away team (captain is member 0)
             ldx #LEN_TM_MEMBERS*2-1
 -           lda InitAwayTeamData,x
@@ -1108,6 +1105,22 @@ PlanetLoop:
 
             jsr UpdateSentinels
 
+            ; check lose conditions (captain lost or all others lost)
+            lda AwayTeam+TM_MEMBERS_X   ; captain
+            bpl +                       ; still alive
+            ldx AwayTeam+TM_CAPTAIN_NAME
+--          lda #T_LOST
+            jsr DrawSpeechReadJoystick
+            jmp BackIntoSpace
++           ldx #1                      ; skip captain
+-           lda AwayTeam+TM_MEMBERS_X,x
+            bpl +                       ; still alive
+            inx
+            cpx #LEN_TM_MEMBERS
+            bne -
+            ldx #T_TEAM
+            bne --
++
             ; test win condition: captain is in temple
             lda AwayTeam+TM_MEMBERS_X
             cmp #TEMPLE_X+1
@@ -1197,19 +1210,67 @@ UpdateSentinels:
             jsr DrawSentinelCounter
             cmp #$B0
             bne +
-            ; fire laser until first non-space character
+            ; fire laser
             lda #CHR_LASER
-            jsr DrawSentinelLaser
-            ; TODO check and kill any characters (Y has the x-offset of impact <> 0)
-            lda #CHR_SPACE
-            jsr DrawSentinelLaser
+            jsr DrawSentinelLaser       ; Y will be x-offset of hit
+            lda SentinelsY,x            ; y-offset
+            jsr MarkHitMembers
+            lda SentinelsY,x            ; y-offset
+            sec
+            sbc #1                      ; check y-offset-1 to hit feet
+            jsr MarkHitMembers
             lda #SENTINEL_RESET
             sta Sentinels,x
             jsr DrawSentinelCounter
+            lda #CHR_SPACE
+            jsr DrawSentinelLaser
+            jsr EraseDeadMembers
 +           dec Sentinels,x
             dex
             bpl --
             rts
+
+; check and kill members of away team if hit at A=y-offset, Y=x-offset (clobbers A,Tmp1)
+MarkHitMembers:
+            stx Tmp1                    ; backup
+            ldx #LEN_TM_MEMBERS-1
+-           cmp AwayTeam+TM_MEMBERS_Y,x
+            bne +                       ; miss
+            pha                         ; backup
+            tya
+            cmp AwayTeam+TM_MEMBERS_X,x ; will be 0..39 or <0 if dead (always miss)
+            bne ++
+            ; mark member killed
+            lda AwayTeam+TM_MEMBERS_X,x
+            ora #$80                    ; <0 will not be drawn
+            sta AwayTeam+TM_MEMBERS_X,x
+++          pla                         ; restore
++           dex
+            bpl -
+            ldx Tmp1                    ; restore
+            rts
+
+; erase away team  members that just died (clobbers A,Y)
+EraseDeadMembers:
+            stx Tmp1                    ; backup
+            sty Tmp2                    ; backup
+            ldx #LEN_TM_MEMBERS-1
+-           lda AwayTeam+TM_MEMBERS_X,x
+            bpl +                       ; still alive?
+            cmp #MEMBER_DEAD
+            beq +
+            ; dying
+            and #$7F                    ; fixup x-offset
+            ldy AwayTeam+TM_MEMBERS_Y,x
+            jsr ErasePersonAt
+            lda #MEMBER_DEAD
+            sta AwayTeam+TM_MEMBERS_X,x
++           dex
+            bpl -
+            ldx Tmp1                    ; restore
+            ldy Tmp2                    ; restore
+            rts
+
 
 ; draw counter for sentinal X at cursor (clobbers A,Y) returns counter in A
 DrawSentinelCounter:
