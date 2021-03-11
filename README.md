@@ -10,47 +10,60 @@ Technical limitations:
 
 # STAR TREK: LAST HOPE
 
-As captain of the Starfleet vessel USS Something you jump from DS9 into the wormhole to the Gamma Quadrant.
+The USS Firebird has arrived at DS709, deep in the Gamma Quadrant. In this remote sector of the galaxy we hope to find the relics that can save our planet Earth from a mysterious disease that has already took millions of lives.
 
-There you must fly to different planets and visit them with an away team to find relics: the plot.
+Star Fleet has gathered a crew of elite captains that lead away teams in search of the relics. But the sectors are filled with raiders so it will be a dangerous voyage.
+
+We need you to guide us. You are our last hope.
 
 Each sector that you visit can contain:
-1. a friendly planet to visit (gain crew)
 1. a hostile planet to visit (away team battle)
-1. raiders (ship battle, losing crew and structural integrity in the process)
-1. a space station to visit (heal integrity, upgrade ship?) (only do 1 option?)
+1. raiders (ship fight, losing structural integrity in the process)
+1. a space station (heal integrity)
 
-You will have a limited crew, including some familiar sounding lead-characters: KIRK, JANE, JLUC, SISK, MIKA, etc.
-Each character should have a different first character, so they can be depicted by a single characters.
+You will have a limited crew, including some familiar sounding lead-characters: KIRK, JEAN LUC, KATHERINE, ARCHER, SARU and MICHAEL. Each lead-character is depicted by the first letter of his/her name.
 
-Each away team follows a leader while being under attack from opposing forces: Klingon, Borg and others.
-
-When your leader dies, the away team has lost (they will all be shot)
-
-When all your lead-characters die, it's game over.
+The away team follows the leader while being under attack from sentinel lasers.
 
 ## Game mechanics
 
-The game consists of a few +'s on screen representing the sector map. The USS Something will be there, as will
-an object in each sector. Empty appearing sectors contain raiders that show up when you arrive.
+The game consists of a few +'s on screen representing the sector map. The USS Firebird will be there, as will an object in each sector. Empty appearing sectors contain raiders that show up when you arrive.
 
-Depending on the type of raiders the battle will be easy or hard.
+Depending on the type of raiders the fight will be relatively easy or hard.
 
-The ship battle can occur visually between char-based ships that shoot sprites at each other.
+The ship fight occurs visually between PETSCII ships that shoot sprites at each other.
 
-Battle takes place in turns (debouncing joystick) with enemies only moving after you move.
+The fight takes place in turns (debouncing joystick) with enemies only moving after you move.
 
-You can choose your options via an on screen menu (that will be overlaid on the left when the ship is right
-and vice versa).
+You can choose your options via an on screen menu.
 
-When battling on the ground the game shows a single screen with a small background where you have to defeat
-all the enemies. In the case of a friendly planet (you will know only when you teleport down) you can just
-walk to a city.
+When battling on the planet the game shows a single screen with a small background where you have to avoid all the enemies. The relics are kept in a temple.
+Lead the main character into the temple to win the relic.
 
-Only hostile planets can have relics. Find all relics and fly back to DS9 to win the game.
-
-When you lose a battle on a hostile planet, you cannot attack again immediately.
+Once you have gathered all relics, fly back to DS709 to win the game.
 
 Raiders will re-emerge each time you enter the sector.
 
-Visited friendly planets can no longer be visited.
+## Implementation
+
+The game is written in ACME 6502 assembler code and loads from `$0120` in memory.
+It overwrites many BASIC and KERNAL variables and it runs automatically by overwriting the stack with its start address.
+This might not work on all C64 versions or emulators but it is sufficient for the competition. A small `loader.asm` is provided to create a version that loads and runs from `$0801` like a regular program (used for the lvllvl/c64 browser version.)
+
+### Details
+
+* The game is won when the ship reaches DS709 with 3 relics
+* The game is lost when the ship runs out of hitpoints during a fight
+* The game is also lost when you are out of captains when transporting down
+* Most sectors have 80% chance of a small raider, a few on the left only 50%
+* Each planet is guarded by a (returning) large raider
+* At the start of the ship fight, your ship always gains shields
+* Firing a torpedo will also increase your chance to hit next time
+* Evasive manouvers will lower the hit chance of the raider
+* Fleeing will cause shields to drop and allows the raider a last shot
+* The 3 stations completely restore all hitpoints of the ship
+* On the planet, the away team is lost when the captain is hit by the laser
+* Also, the away team is lost when all other crew members have been hit
+* You gain a relic when the captain safely reaches the temple
+* Each time you transport to the planet, the terrain is randomized and you control a different captain
+* Each time you start the game, a random navigator is picked
