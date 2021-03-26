@@ -23,15 +23,15 @@ Each sector that you visit can contain:
 
 You will have a limited crew, including some familiar sounding lead-characters: KIRK, JEAN LUC, KATHERINE, ARCHER, SARU and MICHAEL. Each lead-character is depicted by the first letter of his/her name.
 
-The away team follows the leader while being under attack from sentinel lasers.
+On a planet, the away team follows their leader exactly while trying to avoid sentinel lasers.
 
 ## Game mechanics
 
 The game consists of a few +'s on screen representing the sector map. The USS Firebird will be there, as will an object in each sector. Empty appearing sectors contain raiders that show up when you arrive.
 
-Depending on the type of raiders the fight will be relatively easy or hard.
+Depending on the type of raider the fight will be relatively easy or hard.
 
-The ship fight occurs visually between PETSCII ships that shoot sprites at each other.
+The ship fight occurs visually between PETSCII ships that shoot a torpedo sprite at each other.
 
 The fight takes place in turns (debouncing joystick) with enemies only moving after you move.
 
@@ -42,12 +42,14 @@ Lead the main character into the temple to win the relic.
 
 Once you have gathered all relics, fly back to DS709 to win the game.
 
-Raiders will re-emerge each time you enter the sector.
+Raiders will re-emerge each time you enter the sector, also at planets.
 
 ## Implementation
 
-The game is written in ACME 6502 assembler code and loads from `$0120` in memory.
-It overwrites many BASIC and KERNAL variables and it runs automatically by overwriting the stack with its start address.
+The game is written in ACME 6502 assembler code in Visual Studio Code with the `vs64` extension. Just build with `acme -v -f cbm -o startrek.prg startrek.asm`.
+
+It loads from `$0120` in memory and thus overwrites many BASIC and KERNAL variables.
+It starts automatically by overwriting the stack with the start address.
 This might not work on all C64 versions or emulators but it is sufficient for the competition. A small `loader.asm` is provided to create a version that loads and runs from `$0801` like a regular program (used for the lvllvl/c64 browser version.)
 
 ### Details
@@ -59,11 +61,11 @@ This might not work on all C64 versions or emulators but it is sufficient for th
 * Each planet is guarded by a (returning) large raider
 * At the start of the ship fight, your ship always gains shields
 * Firing a torpedo will also increase your chance to hit next time
-* Evasive manouvers will lower the hit chance of the raider
+* Evasive maneuvers will lower the hit chance of the raider
 * Fleeing will cause shields to drop and allows the raider a last shot
 * The 3 stations completely restore all hitpoints of the ship
-* On the planet, the away team is lost when the captain is hit by the laser
-* Also, the away team is lost when all other crew members have been hit
+* On the planet, the away team is lost immediately if the captain is shot by the laser
+* The away team is also lost when all other members are shot by the laser
 * You gain a relic when the captain safely reaches the temple
 * Each time you transport to the planet, the terrain is randomized and you control a different captain
 * Each time you start the game, a random navigator is picked
