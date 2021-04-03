@@ -24,3 +24,7 @@ Copy:
         bne -
 
         jmp $0400
+
+PETCharset:
+    * = $2000
+    !binary "assets/petfont.bin"
