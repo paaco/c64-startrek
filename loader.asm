@@ -8,6 +8,7 @@ Binary:
     !binary ".cache/startrek.prg",,2
 
 Copy:
+        sei
         ldx #0
 
         inc1=*+2
